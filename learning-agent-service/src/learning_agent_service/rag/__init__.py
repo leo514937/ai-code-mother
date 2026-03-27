@@ -19,6 +19,7 @@ from .models import (
 )
 from .protocols import DenseRetriever, HybridRetriever, KnowledgeGovernanceStore, KnowledgeRepository, MetadataRetriever, Reranker, SparseRetriever
 from .rewrite import QueryRewriteContext, QueryRewriteService
+from .service import DEFAULT_KNOWLEDGE_CHUNKS, HeuristicModelGateway, HybridRAGOrchestrator
 
 __all__ = [
     "ChunkType",
@@ -26,15 +27,18 @@ __all__ = [
     "CitationBuilder",
     "DenseRetriever",
     "DifficultyLevel",
+    "DEFAULT_KNOWLEDGE_CHUNKS",
     "EvidenceGovernanceConfig",
     "EvidenceGovernanceService",
     "EvidenceItem",
     "EvidencePack",
     "GovernanceAction",
     "HybridRecallResult",
+    "HybridRAGOrchestrator",
     "HybridRetriever",
     "HybridRetrieverConfig",
     "HybridRetrieverService",
+    "HeuristicModelGateway",
     "InMemoryReranker",
     "InMemoryTokenRetriever",
     "KnowledgeChunk",

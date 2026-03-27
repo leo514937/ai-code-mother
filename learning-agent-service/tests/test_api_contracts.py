@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from learning_agent_service.api.contracts import (
     ApiResponse,
     ChatStreamRequest,
+    ClarificationCardPayload,
+    ClarificationOptionPayload,
     Citation,
     FinalPayload,
     QuizGenerateRequest,
@@ -88,6 +90,15 @@ class ApiContractsTestCase(unittest.TestCase):
         )
         self.assertEqual(payload.citations[0].chunk_id, "chunk-1")
         self.assertEqual(payload.used_tools, ["searchKnowledge"])
+
+    def test_clarification_payload_uses_structured_options(self) -> None:
+        payload = ClarificationCardPayload(
+            card_id="clarify-1",
+            question="Which topic do you mean?",
+            options=[ClarificationOptionPayload(id="1", label="Spring AOP", value="Spring AOP")],
+            ambiguity_type="reference",
+        )
+        self.assertEqual(payload.options[0].label, "Spring AOP")
 
     def test_api_response_success_helper(self) -> None:
         response = ApiResponse.success({"ok": True})

@@ -3,19 +3,19 @@
 from datetime import datetime
 
 from ..compat import APIRouter
-from ..contracts import ChatStreamRequest, ErrorPayload, EventType, SseEnvelope
+from ..contracts import ChatStreamRequest, EventType, SseEnvelope
 from ..dependencies import LearningAgentService
+from ..errors import build_error_payload
 from ..sse import build_sse_response
 
 
 WORKFLOW_VERSION = "learn-agent/v1"
 
 
-def _build_service_error(request: ChatStreamRequest, message: str) -> SseEnvelope:
-    payload = ErrorPayload(
-        code="LEARN-5600",
-        message=message,
-        retryable=False,
+def _build_service_error(request: ChatStreamRequest, exc: Exception) -> SseEnvelope:
+    payload = build_error_payload(
+        exc,
+        default_code="LEARN-5600",
         stage="chat_stream",
     ).model_dump(mode="json")
     return SseEnvelope(
@@ -35,5 +35,5 @@ def register_chat_routes(router: APIRouter, service: LearningAgentService) -> No
         try:
             events = service.run_stream(request)
         except RuntimeError as exc:
-            events = [_build_service_error(request, str(exc))]
+            events = [_build_service_error(request, exc)]
         return build_sse_response(events)

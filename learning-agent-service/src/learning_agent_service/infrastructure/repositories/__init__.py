@@ -15,19 +15,31 @@ from .records import (
     TopicMasteryRecord,
     UserPreferenceProfileRecord,
 )
+from .runtime_adapters import (
+    AdapterStatus,
+    DurableTopicMasteryStore,
+    OutboxAsyncLogStore,
+    RedisSessionContextStore,
+    RuntimeDependencyStatus,
+)
 from .tool_logs import ToolInvocationLogRepository
 from .topic_mastery import TopicMasteryRepository
 
 __all__ = [
+    "AdapterStatus",
     "ClarificationRecordEntry",
     "ClarificationRecordRepository",
+    "DurableTopicMasteryStore",
     "KnowledgeDocumentRecord",
     "KnowledgeDocumentVersionRecord",
     "KnowledgeGovernanceRepository",
     "LearningPlanItemRecord",
     "LearningPlanRepository",
+    "OutboxAsyncLogStore",
     "OutboxEventRecord",
     "OutboxRepository",
+    "RedisSessionContextStore",
+    "RuntimeDependencyStatus",
     "ToolInvocationLogEntry",
     "ToolInvocationLogRepository",
     "TopicMasteryRecord",

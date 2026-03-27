@@ -21,6 +21,7 @@ class ChatTurnCommand(CoreModel):
     message: str
     response_mode: Optional[OutputStyle] = None
     topic_hint: Optional[str] = None
+    history_summary: Optional[str] = None
     client_context: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,6 +82,27 @@ class EvidencePack(CoreModel):
     items: List[EvidenceItem] = Field(default_factory=list)
     discard_summary: Dict[str, Any] = Field(default_factory=dict)
     top_scores: List[float] = Field(default_factory=list)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridRecallCandidate(CoreModel):
+    chunk_id: str
+    score: float = 0.0
+    content: Optional[str] = None
+    document_id: Optional[str] = None
+    chunk_type: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    channels: List[str] = Field(default_factory=list)
+    raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridRecallResult(CoreModel):
+    dense_hits: List[HybridRecallCandidate] = Field(default_factory=list)
+    sparse_hits: List[HybridRecallCandidate] = Field(default_factory=list)
+    metadata_hits: List[HybridRecallCandidate] = Field(default_factory=list)
+    fused_hits: List[HybridRecallCandidate] = Field(default_factory=list)
+    reranked_hits: List[HybridRecallCandidate] = Field(default_factory=list)
+    metrics: Dict[str, Any] = Field(default_factory=dict)
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -145,18 +167,31 @@ class PersistentSessionContext(CoreModel):
     last_retrieval_topic: Optional[str] = None
     active_plan_id: Optional[str] = None
     learning_mode: bool = False
+    history_summary: Optional[str] = None
+    pending_clarification: Optional[ClarificationCard] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnRuntimeState(CoreModel):
     raw_query: str
-    understanding_result: Optional[TurnUnderstandingResult] = None
+    decision: TurnDecision = TurnDecision.DIRECT_ANSWER
+    intent: Optional[IntentType] = None
+    intent_confidence: float = 0.0
+    requested_output_style: Optional[OutputStyle] = None
+    slots: Dict[str, Any] = Field(default_factory=dict)
+    reference_resolution: Optional[ReferenceResolutionResult] = None
+    clarification_card: Optional[ClarificationCard] = None
     retrieval_plan: Optional[RetrievalPlan] = None
-    rag_result: Optional[RagResult] = None
+    hybrid_recall: Optional[HybridRecallResult] = None
+    evidence_pack: Optional[EvidencePack] = None
+    citations: List[Citation] = Field(default_factory=list)
     answer_plan: Optional[AnswerPlan] = None
     tool_plan: Optional[ToolSelection] = None
+    raw_tool_result: Optional[ToolExecutionResult] = None
     tool_result: Optional[NormalizedToolResult] = None
     final_answer: Optional[str] = None
+    understanding_result: Optional[TurnUnderstandingResult] = None
+    rag_result: Optional[RagResult] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -164,10 +199,18 @@ class GraphRuntimeMeta(CoreModel):
     trace_id: str
     session_id: str
     turn_id: str
+    workflow_version: str
+    request_ts: datetime
+    user_id: str
+    response_mode: Optional[OutputStyle] = None
+    topic_hint: Optional[str] = None
+    history_summary: Optional[str] = None
+    client_context: Dict[str, Any] = Field(default_factory=dict)
     metrics: Dict[str, Any] = Field(default_factory=dict)
     errors: List[ErrorInfo] = Field(default_factory=list)
     degrade_to: Optional[str] = None
     terminal_event: Optional[TerminalEvent] = None
+    emitted_events: List[SseEnvelope] = Field(default_factory=list)
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -202,3 +245,6 @@ class SseEnvelope(CoreModel):
     timestamp: datetime
     workflow_version: str
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+GraphRuntimeMeta.model_rebuild()

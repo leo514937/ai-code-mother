@@ -14,18 +14,23 @@ INTENT_CHUNK_MAP = {
     "interview": (ChunkType.INTERVIEW_TEMPLATE.value, ChunkType.COMPARISON.value, ChunkType.QA.value),
     "code": (ChunkType.CODE_EXAMPLE.value, ChunkType.PITFALL.value, ChunkType.QA.value),
     "plan": (ChunkType.ROADMAP.value, ChunkType.CONCEPT.value, ChunkType.PRACTICE_CASE.value),
+    "study_plan": (ChunkType.ROADMAP.value, ChunkType.CONCEPT.value, ChunkType.PRACTICE_CASE.value),
+    "follow_up": (ChunkType.CONCEPT.value, ChunkType.COMPARISON.value, ChunkType.QA.value),
+    "summary": (ChunkType.QA.value, ChunkType.CONCEPT.value, ChunkType.ROADMAP.value),
 }
 
 _CATEGORY_HINTS = {
-    "java": ("java", "jvm", "spring", "redis", "mysql", "并发", "线程池", "锁", "事务"),
+    "java": ("spring", "aop", "bean", "transaction", "boot", "java", "jvm", "并发", "线程池", "锁", "事务"),
     "agent": ("agent", "langgraph", "react", "tool", "memory", "workflow"),
     "rag": ("rag", "retrieval", "embedding", "rerank", "qdrant", "chunk"),
+    "redis": ("redis", "缓存", "持久化"),
 }
 
 _SOURCE_HINTS = {
     "interview": ("面试", "interview"),
     "practice": ("练习", "题", "quiz"),
-    "faq": ("区别", "为什么", "怎么"),
+    "faq": ("区别", "为什么"),
+    "document": ("原理", "概念", "解释", "怎么"),
 }
 
 

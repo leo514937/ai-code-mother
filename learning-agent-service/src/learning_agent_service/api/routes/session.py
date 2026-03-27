@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
-from ..compat import APIRouter, HTTPException
+from ..compat import APIRouter
 from ..contracts import SessionStateResponse
 from ..dependencies import LearningAgentService
+from ..errors import raise_http_error
 
 
 def register_session_routes(router: APIRouter, service: LearningAgentService) -> None:
@@ -11,4 +12,4 @@ def register_session_routes(router: APIRouter, service: LearningAgentService) ->
         try:
             return service.get_session_state(session_id)
         except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc))
+            raise_http_error(exc, status_code=503, default_code="LEARN-5600", stage="session_state")

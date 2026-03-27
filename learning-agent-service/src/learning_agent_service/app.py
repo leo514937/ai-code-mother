@@ -6,6 +6,9 @@ from json import dumps
 from typing import Any, Awaitable, Callable, Optional
 
 from learning_agent_service import __version__
+from learning_agent_service.api.compat import FastAPI as CompatFastAPI
+from learning_agent_service.api.dependencies import LearningAgentService
+from learning_agent_service.config import get_settings
 
 FASTAPI_IMPORT_ERROR: Optional[Exception] = None
 
@@ -18,29 +21,43 @@ except Exception as exc:  # pragma: no cover - fallback is intentional
     ORJSONResponse = None  # type: ignore[assignment]
 
 from learning_agent_service.api.router import create_api_router
-from learning_agent_service.application.bootstrap import bootstrap_application
 
 AsgiApp = Callable[[dict[str, Any], Callable[..., Awaitable[Any]], Callable[..., Awaitable[Any]]], Awaitable[None]]
 
 
-def _build_fastapi_app() -> Any:
-    app = FastAPI(
-        title="Learning Agent Service",
-        version=__version__,
-        default_response_class=ORJSONResponse,
-        docs_url="/docs",
-        redoc_url="/redoc",
-    )
-    bootstrap = bootstrap_application(app)
-    app.include_router(create_api_router(bootstrap.learning_service))
+def _build_fastapi_app(service: Optional[LearningAgentService] = None, app_cls: Any = None) -> Any:
+    app_factory = app_cls or FastAPI or CompatFastAPI
+    kwargs = {
+        "title": "Learning Agent Service",
+        "version": __version__,
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+    }
+    if ORJSONResponse is not None:
+        kwargs["default_response_class"] = ORJSONResponse
+    app = app_factory(**kwargs)
+    if service is None:
+        from learning_agent_service.application.bootstrap import bootstrap_application
+
+        bootstrap = bootstrap_application(app)
+        service = bootstrap.learning_service
+    else:
+        app.state.settings = get_settings()
+        app.state.bootstrap_errors = []
+        app.state.infrastructure_status = {}
+    app.state.learning_service = service
+    app.include_router(create_api_router(service))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        bootstrap_errors = list(getattr(app.state, "bootstrap_errors", []))
         return {
             "status": "ok",
             "service": "learning-agent-service",
             "version": __version__,
-            "bootstrap_ready": True,
+            "bootstrap_ready": not bootstrap_errors,
+            "bootstrap_errors": bootstrap_errors,
+            "infrastructure": getattr(app.state, "infrastructure_status", {}),
         }
 
     @app.get("/meta")
@@ -49,6 +66,7 @@ def _build_fastapi_app() -> Any:
             "service": "learning-agent-service",
             "version": __version__,
             "settings": app.state.settings.safe_dump(),
+            "infrastructure": getattr(app.state, "infrastructure_status", {}),
         }
 
     return app
@@ -87,10 +105,10 @@ def _build_fallback_asgi() -> AsgiApp:
     return fallback_app
 
 
-def create_app() -> Any:
-    if FastAPI is None:
+def create_app(service: Optional[LearningAgentService] = None) -> Any:
+    if FastAPI is None and service is None:
         return _build_fallback_asgi()
-    return _build_fastapi_app()
+    return _build_fastapi_app(service=service, app_cls=FastAPI or CompatFastAPI)
 
 
 app = create_app()

@@ -4,7 +4,7 @@ import json
 from typing import Iterable, Iterator
 
 from .compat import StreamingResponse
-from .contracts import SseEnvelope
+from .contracts import SseEnvelope, validate_event_payload
 
 
 def build_event_id(session_id: str, turn_id: str, seq: int) -> str:
@@ -12,12 +12,15 @@ def build_event_id(session_id: str, turn_id: str, seq: int) -> str:
 
 
 def serialize_envelope(envelope: SseEnvelope, seq: int) -> str:
-    body = envelope.model_dump(mode="json")
+    validated = envelope.model_copy(
+        update={"payload": validate_event_payload(envelope.event_type, envelope.payload)}
+    )
+    body = validated.model_dump(mode="json")
     lines = [
         "id: {event_id}".format(
-            event_id=build_event_id(envelope.session_id, envelope.turn_id, seq),
+            event_id=build_event_id(validated.session_id, validated.turn_id, seq),
         ),
-        "event: {event_type}".format(event_type=envelope.event_type),
+        "event: {event_type}".format(event_type=validated.event_type),
         "data: {payload}".format(
             payload=json.dumps(body, ensure_ascii=False, separators=(",", ":")),
         ),

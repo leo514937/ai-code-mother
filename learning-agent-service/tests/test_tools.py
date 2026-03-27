@@ -6,6 +6,14 @@ import unittest
 import _bootstrap  # noqa: F401
 from pydantic import BaseModel
 
+from learning_agent_service.domain import (
+    ChatTurnCommand,
+    ToolExecutionResult as DomainToolExecutionResult,
+    ToolSelection as DomainToolSelection,
+    TurnUnderstandingResult,
+    build_initial_state,
+)
+from learning_agent_service.domain.enums import ToolExecutionStatus
 from learning_agent_service.tools import (
     RegisteredTool,
     SideEffectLevel,
@@ -15,6 +23,11 @@ from learning_agent_service.tools import (
     ToolResultNormalizer,
     ToolSelection,
     ToolSpec,
+)
+from learning_agent_service.tools.service import (
+    ToolExecutor as RuntimeToolExecutor,
+    ToolPlanner as RuntimeToolPlanner,
+    ToolResultNormalizer as RuntimeToolResultNormalizer,
 )
 
 
@@ -27,6 +40,17 @@ class DummyOutput(BaseModel):
 
 
 class ToolsTestCase(unittest.TestCase):
+    def _state(self):
+        return build_initial_state(
+            ChatTurnCommand(
+                trace_id="trace-1",
+                session_id="session-1",
+                turn_id="turn-1",
+                user_id="user-1",
+                message="Generate a quiz about JVM",
+            )
+        )
+
     def test_tool_planner_maps_intent(self) -> None:
         selection = ToolPlanner().plan(
             intent="quiz",
@@ -119,3 +143,54 @@ class ToolsTestCase(unittest.TestCase):
         self.assertEqual(result.error_code, "LEARN-5301")
         self.assertTrue(result.degraded)
         self.assertEqual(result.degrade_to, "lightweight_quiz")
+
+    def test_runtime_tool_planner_returns_domain_selection(self) -> None:
+        state = self._state()
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "understanding_result": state["turn"].understanding_result
+                or TurnUnderstandingResult(
+                    decision="tool_then_answer",
+                    intent="quiz",
+                    intent_confidence=0.9,
+                    slots={"topic": "JVM"},
+                ),
+            }
+        )
+        selection = RuntimeToolPlanner().plan(state)
+        self.assertTrue(selection.should_execute)
+        self.assertEqual(selection.tool_name, "generateQuiz")
+        self.assertEqual(selection.input_payload["topic"], "JVM")
+
+    def test_runtime_tool_executor_uses_shared_executor_stack(self) -> None:
+        result = RuntimeToolExecutor().execute(
+            DomainToolSelection(
+                tool_name="generateQuiz",
+                should_execute=True,
+                input_payload={"topic": "JVM", "count": 2},
+                reason="test",
+                extra={"tool_call_id": "call-1"},
+            ),
+            self._state(),
+        )
+        self.assertEqual(result.status, ToolExecutionStatus.SUCCESS)
+        self.assertEqual(result.output_payload["data"]["topic"], "JVM")
+        self.assertEqual(result.extra["tool_call_id"], "call-1")
+
+    def test_runtime_tool_result_normalizer_preserves_error_metadata(self) -> None:
+        raw = DomainToolExecutionResult(
+            status=ToolExecutionStatus.DEGRADED,
+            tool_name="generateQuiz",
+            output_payload={},
+            extra={
+                "error_code": "LEARN-5301",
+                "error_message": "Tool execution timed out",
+                "retryable": True,
+                "degraded": True,
+                "degrade_to": "lightweight_quiz",
+            },
+        )
+        normalized = RuntimeToolResultNormalizer().normalize(raw, self._state())
+        self.assertEqual(normalized.status, ToolExecutionStatus.DEGRADED)
+        self.assertTrue(normalized.extra["degraded"])
+        self.assertEqual(normalized.extra["errors"]["code"], "LEARN-5301")

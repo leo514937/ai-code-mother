@@ -159,7 +159,7 @@ class HybridRetrieverService:
         }
         return HybridRecallResult(
             hits=tuple(merged_hits),
-            retrieval_strategy="dense+sparse+metadata>rrf>rerank",
+            retrieval_strategy="dense+sparse+metadata->rrf->rerank",
             degraded_routes=tuple(degraded_routes),
             metrics=metrics,
             query_plan=plan,
@@ -235,16 +235,21 @@ def _matches_filters(chunk: KnowledgeChunk, filters: RetrievalFilters) -> bool:
         (filters.version, chunk.version),
     )
     for expected, actual in checks:
-        if expected and actual not in expected:
+        normalized_expected = {_normalize_value(value) for value in expected if value}
+        normalized_actual = _normalize_value(actual)
+        if normalized_expected and normalized_actual not in normalized_expected:
             return False
-    if filters.tags and not set(filters.tags).issubset(set(chunk.tags)):
+    if filters.tags and not {_normalize_value(tag) for tag in filters.tags}.issubset(
+        {_normalize_value(tag) for tag in chunk.tags}
+    ):
         return False
     for key, expected in filters.extra.items():
         actual = chunk.metadata.get(key)
         if isinstance(expected, (list, tuple, set)):
-            if actual not in expected:
+            normalized_expected = {_normalize_value(value) for value in expected if value}
+            if _normalize_value(actual) not in normalized_expected:
                 return False
-        elif actual != expected:
+        elif _normalize_value(actual) != _normalize_value(expected):
             return False
     return True
 
@@ -269,15 +274,23 @@ def _count_filter_matches(chunk: KnowledgeChunk, filters: RetrievalFilters) -> i
         (filters.version, chunk.version),
     )
     for expected, actual in checks:
-        if expected and actual in expected:
+        normalized_expected = {_normalize_value(value) for value in expected if value}
+        if normalized_expected and _normalize_value(actual) in normalized_expected:
             matches += 1
-    if filters.tags and set(filters.tags).issubset(set(chunk.tags)):
+    if filters.tags and {_normalize_value(tag) for tag in filters.tags}.issubset(
+        {_normalize_value(tag) for tag in chunk.tags}
+    ):
         matches += 1
     for key, expected in filters.extra.items():
         actual = chunk.metadata.get(key)
         if isinstance(expected, (list, tuple, set)):
-            if actual in expected:
+            normalized_expected = {_normalize_value(value) for value in expected if value}
+            if _normalize_value(actual) in normalized_expected:
                 matches += 1
-        elif actual == expected:
+        elif _normalize_value(actual) == _normalize_value(expected):
             matches += 1
     return matches
+
+
+def _normalize_value(value: object) -> str:
+    return str(value or "").strip().lower()

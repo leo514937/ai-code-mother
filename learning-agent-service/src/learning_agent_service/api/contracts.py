@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,10 +52,17 @@ class StateUpdatePayload(BaseModel):
     status: str
 
 
+class ClarificationOptionPayload(BaseModel):
+    id: str
+    label: str
+    value: Optional[str] = None
+    description: Optional[str] = None
+
+
 class ClarificationCardPayload(BaseModel):
     card_id: str
     question: str
-    options: List[str] = Field(default_factory=list)
+    options: List[ClarificationOptionPayload] = Field(default_factory=list)
     ambiguity_type: Optional[str] = None
 
 
@@ -82,6 +89,10 @@ class ToolResultPayload(BaseModel):
     tool_call_id: str
     status: str
     degraded: bool = False
+    retryable: bool = False
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    degraded_to: Optional[str] = None
     output: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -185,3 +196,23 @@ class SseEnvelope(BaseModel):
     timestamp: datetime
     workflow_version: str = Field(min_length=1)
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+EVENT_PAYLOAD_MODELS: Dict[EventType, Type[BaseModel]] = {
+    EventType.ACK: AckPayload,
+    EventType.STATE_UPDATE: StateUpdatePayload,
+    EventType.CLARIFICATION_CARD: ClarificationCardPayload,
+    EventType.RETRIEVAL_STARTED: RetrievalStartedPayload,
+    EventType.RETRIEVAL_RESULT: RetrievalResultPayload,
+    EventType.TOOL_CALL: ToolCallPayload,
+    EventType.TOOL_RESULT: ToolResultPayload,
+    EventType.DELTA: DeltaPayload,
+    EventType.FINAL: FinalPayload,
+    EventType.ERROR: ErrorPayload,
+}
+
+
+def validate_event_payload(event_type: EventType | str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_event = event_type if isinstance(event_type, EventType) else EventType(event_type)
+    model = EVENT_PAYLOAD_MODELS[normalized_event]
+    return model.model_validate(payload).model_dump(mode="json")

@@ -14,6 +14,7 @@ class BootstrapResult:
     container: ServiceContainer
     learning_service: WorkflowLearningAgentService
     logging_backend: Dict[str, Any]
+    infrastructure_status: Dict[str, Any]
 
 
 def bootstrap_application(app: Any | None = None) -> BootstrapResult:
@@ -21,10 +22,14 @@ def bootstrap_application(app: Any | None = None) -> BootstrapResult:
     configure_logging(settings.observability)
     dependencies = build_dependencies(settings=settings)
     learning_service = create_learning_agent_service(dependencies.container)
+    infrastructure_status = dependencies.container.runtime_dependency_status.as_dict()
     if app is not None:
+        app.state.container = dependencies.container
         app.state.settings = settings
         app.state.dependencies = dependencies
         app.state.learning_service = learning_service
+        app.state.infrastructure_status = infrastructure_status
+        app.state.bootstrap_errors = list(dependencies.container.runtime_dependency_status.bootstrap_errors)
     return BootstrapResult(
         container=dependencies.container,
         learning_service=learning_service,
@@ -33,4 +38,5 @@ def bootstrap_application(app: Any | None = None) -> BootstrapResult:
             "log_level": settings.observability.log_level,
             "json_logs": settings.observability.json_logs,
         },
+        infrastructure_status=infrastructure_status,
     )

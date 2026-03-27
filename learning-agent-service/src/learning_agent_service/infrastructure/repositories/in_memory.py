@@ -17,7 +17,7 @@ class InMemorySessionContextStore(SessionContextPort):
         return deepcopy(self.sessions.get((session_id, user_id), PersistentSessionContext()))
 
     def save(self, context: PersistentSessionContext, runtime: GraphRuntimeMeta) -> None:
-        self.sessions[(runtime.session_id, runtime.extra.get("user_id", "anonymous"))] = deepcopy(context)
+        self.sessions[(runtime.session_id, runtime.user_id)] = deepcopy(context)
 
 
 @dataclass

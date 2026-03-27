@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 
 from learning_agent_service.infrastructure.db.models import TopicMasteryModel
 
@@ -51,3 +51,14 @@ class TopicMasteryRepository(SqlAlchemyRepositoryBase):
             session.add(instance)
             session.flush()
             return instance
+
+    def list_for_user(self, user_id: str) -> List[TopicMasteryModel]:
+        self._require_sqlalchemy()
+        with self.session_scope() as session:
+            return list(
+                session.execute(
+                    select(TopicMasteryModel)
+                    .where(TopicMasteryModel.user_id == user_id)
+                    .order_by(TopicMasteryModel.review_priority.desc(), TopicMasteryModel.last_seen_at.desc())
+                ).scalars()
+            )

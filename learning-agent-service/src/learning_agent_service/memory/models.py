@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +24,8 @@ class PersistentSessionContext:
     last_retrieval_topic: Optional[str] = None
     active_plan_id: Optional[str] = None
     learning_mode: Optional[bool] = None
+    history_summary: Optional[str] = None
+    pending_clarification: Optional[Mapping[str, Any]] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -61,6 +63,11 @@ class ExplicitUserSignals:
     confirmed_plan: bool = False
     mastered: bool = False
     confused: bool = False
+    confirmed_output_style: bool = False
+    confirmed_code_examples: bool = False
+    confirmed_interview_mode: bool = False
+    repeated_topic_signal: bool = False
+    low_quiz_score: Optional[float] = None
     focus_topics: Tuple[str, ...] = ()
     weak_topics: Tuple[str, ...] = ()
 
@@ -72,7 +79,8 @@ class SessionUpdate:
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     last_retrieval_topic: Optional[str] = None
     learning_mode: Optional[bool] = None
-    summary_delta: Optional[str] = None
+    history_summary: Optional[str] = None
+    pending_clarification: Optional[Mapping[str, Any]] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -91,8 +99,15 @@ class MemoryPromotionInput:
     current_session: PersistentSessionContext = field(default_factory=PersistentSessionContext)
     current_preferences: Optional[UserPreferenceProfile] = None
     current_mastery: Optional[TopicMasteryRecord] = None
+    quiz_score: Optional[float] = None
     current_time: Optional[datetime] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DurableFactRequest:
+    fact_type: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -102,8 +117,37 @@ class MemoryPromotionResult:
     semantic_facts: Tuple[SemanticMemoryFact, ...] = ()
     weak_topics: Tuple[str, ...] = ()
     reasons: Tuple[str, ...] = ()
+    durable_fact_requests: Tuple[DurableFactRequest, ...] = ()
     outbox_events: Tuple[Mapping[str, Any], ...] = ()
     extra: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PersistSessionPlan:
+    updated_context: PersistentSessionContext
+    preference_patch: Mapping[str, Any] = field(default_factory=dict)
+    semantic_facts: Tuple[SemanticMemoryFact, ...] = ()
+    weak_topics: Tuple[str, ...] = ()
+    durable_fact_requests: Tuple[DurableFactRequest, ...] = ()
+    outbox_events: Tuple[Mapping[str, Any], ...] = ()
+    memory_updates: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SemanticIndexUpdate:
+    topic: str
+    indexed: bool
+    reason: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MasteryComputation:
+    topic: str
+    updated_record: TopicMasteryRecord
+    signal_summary: Mapping[str, Any] = field(default_factory=dict)
+    semantic_index_updates: Tuple[SemanticIndexUpdate, ...] = ()
+    metrics_patch: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -125,6 +169,15 @@ class Recommendation:
     reason: str
     priority: float
     source: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RecommendationSnapshot:
+    topic: str
+    reason: str
+    source: str
+    priority: float
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 

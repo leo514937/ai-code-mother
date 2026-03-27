@@ -18,22 +18,24 @@ def build_initial_state(
     workflow_version: str = "learn-agent/v1",
     persistent: Optional[PersistentSessionContext] = None,
 ) -> GraphState:
-    request_ts = datetime.now(timezone.utc).isoformat()
+    request_ts = datetime.now(timezone.utc)
+    base_persistent = persistent or PersistentSessionContext()
+    if command.history_summary and not base_persistent.history_summary:
+        base_persistent = base_persistent.model_copy(update={"history_summary": command.history_summary})
     return GraphState(
-        persistent=persistent or PersistentSessionContext(),
+        persistent=base_persistent,
         turn=TurnRuntimeState(raw_query=command.message),
         runtime=GraphRuntimeMeta(
             trace_id=command.trace_id,
             session_id=command.session_id,
             turn_id=command.turn_id,
-            extra={
-                "request_ts": request_ts,
-                "workflow_version": workflow_version,
-                "user_id": command.user_id,
-                "response_mode": command.response_mode.value if command.response_mode else None,
-                "topic_hint": command.topic_hint,
-                "client_context": command.client_context,
-            },
+            workflow_version=workflow_version,
+            request_ts=request_ts,
+            user_id=command.user_id,
+            response_mode=command.response_mode,
+            topic_hint=command.topic_hint,
+            history_summary=command.history_summary,
+            client_context=command.client_context,
         ),
     )
 

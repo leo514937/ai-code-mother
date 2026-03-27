@@ -41,6 +41,8 @@ class AppSettings(BaseModel):
     debug: bool = False
     workflow_version: str = "learn-agent/v1"
     request_timeout_seconds: float = 30.0
+    prefer_real_adapters: bool = True
+    allow_in_memory_fallback: bool = True
 
 
 class PostgresSettings(BaseModel):
@@ -102,6 +104,8 @@ class Settings(BaseSettings):
     workflow_version: str = "learn-agent/v1"
     api_prefix: str = "/internal/v1"
     default_response_mode: str = "detailed"
+    prefer_real_adapters: bool = True
+    allow_in_memory_fallback: bool = True
 
     app: AppSettings = Field(default_factory=AppSettings)
     postgres: PostgresSettings = Field(default_factory=PostgresSettings)
@@ -130,6 +134,12 @@ class Settings(BaseSettings):
         request_timeout_seconds = float(
             data.pop("request_timeout_seconds", _env("LEARNING_AGENT_REQUEST_TIMEOUT_SECONDS", 30.0))
         )
+        prefer_real_adapters = bool(
+            data.pop("prefer_real_adapters", _env_bool("LEARNING_AGENT_PREFER_REAL_ADAPTERS", True))
+        )
+        allow_in_memory_fallback = bool(
+            data.pop("allow_in_memory_fallback", _env_bool("LEARNING_AGENT_ALLOW_IN_MEMORY_FALLBACK", True))
+        )
 
         if "app" not in data:
             data["app"] = AppSettings(
@@ -138,6 +148,8 @@ class Settings(BaseSettings):
                 debug=debug,
                 workflow_version=workflow_version,
                 request_timeout_seconds=request_timeout_seconds,
+                prefer_real_adapters=prefer_real_adapters,
+                allow_in_memory_fallback=allow_in_memory_fallback,
             )
 
         if "postgres" not in data:
@@ -236,6 +248,8 @@ class Settings(BaseSettings):
         data.setdefault("environment", data["app"].environment)
         data.setdefault("debug", data["app"].debug)
         data.setdefault("workflow_version", data["app"].workflow_version)
+        data.setdefault("prefer_real_adapters", data["app"].prefer_real_adapters)
+        data.setdefault("allow_in_memory_fallback", data["app"].allow_in_memory_fallback)
         super().__init__(**data)
 
     def safe_dump(self) -> Dict[str, Any]:

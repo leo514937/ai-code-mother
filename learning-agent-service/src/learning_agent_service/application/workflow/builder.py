@@ -32,18 +32,31 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
 
     def run_state(self, state):
         if self._is_terminal(state):
-            return self._emit_terminal(state)
+            return self._finalize_terminal(state)
 
         try:
             result = self._graph.invoke(state)
         except Exception as exc:
             result = self._record_unexpected_error(state, "langgraph.invoke", exc)
 
+        runtime = result["runtime"]
+        if runtime.emitted_events:
+            if runtime.terminal_event is None:
+                default_terminal = (
+                    TerminalEvent.ERROR
+                    if runtime.errors
+                    else TerminalEvent.CLARIFICATION_CARD
+                    if should_clarify(result)
+                    else TerminalEvent.FINAL
+                )
+                result["runtime"] = runtime.model_copy(update={"terminal_event": default_terminal})
+            return result
+
         if result["runtime"].terminal_event == TerminalEvent.ERROR:
-            return self._emit_terminal(result)
+            return self._finalize_terminal(result)
         if should_clarify(result):
-            return self._emit_terminal(result, default_terminal=TerminalEvent.CLARIFICATION_CARD)
-        return self._emit_terminal(result, default_terminal=TerminalEvent.FINAL)
+            return self._finalize_terminal(result, default_terminal=TerminalEvent.CLARIFICATION_CARD)
+        return self._finalize_terminal(result, default_terminal=TerminalEvent.FINAL)
 
 
 

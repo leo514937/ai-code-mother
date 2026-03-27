@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime
 
 import _bootstrap  # noqa: F401
+from pydantic import ValidationError
 
 from learning_agent_service.api.contracts import EventType, SseEnvelope
 from learning_agent_service.api.sse import build_event_id, serialize_envelope, stream_envelopes
@@ -42,3 +43,41 @@ class SseEncodingTestCase(unittest.TestCase):
         self.assertEqual(len(chunks), 2)
         self.assertIn("session-1:turn-1:1", chunks[0])
         self.assertIn("session-1:turn-1:2", chunks[1])
+
+    def test_serialize_clarification_card_with_structured_options(self) -> None:
+        envelope = SseEnvelope(
+            event_type=EventType.CLARIFICATION_CARD,
+            trace_id="trace-1",
+            session_id="session-1",
+            turn_id="turn-2",
+            timestamp=datetime(2026, 3, 27, 12, 0, 0),
+            workflow_version="learn-agent/v1",
+            payload={
+                "card_id": "clarify-1",
+                "question": "Which topic do you mean?",
+                "options": [
+                    {"id": "1", "label": "Spring AOP", "value": "Spring AOP"},
+                    {"id": "2", "label": "JDK Proxy", "value": "JDK Proxy"},
+                ],
+                "ambiguity_type": "reference",
+            },
+        )
+        chunk = serialize_envelope(envelope, seq=1)
+        self.assertIn('"options":[{"id":"1","label":"Spring AOP","value":"Spring AOP","description":null}', chunk)
+
+    def test_serialize_envelope_validates_payload_shape(self) -> None:
+        envelope = SseEnvelope(
+            event_type=EventType.CLARIFICATION_CARD,
+            trace_id="trace-1",
+            session_id="session-1",
+            turn_id="turn-2",
+            timestamp=datetime(2026, 3, 27, 12, 0, 0),
+            workflow_version="learn-agent/v1",
+            payload={
+                "card_id": "clarify-1",
+                "question": "Which topic do you mean?",
+                "options": ["Spring AOP"],
+            },
+        )
+        with self.assertRaises(ValidationError):
+            serialize_envelope(envelope, seq=1)
