@@ -163,6 +163,56 @@ class KnowledgeGovernanceDecision:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ReferenceResolutionRequest:
+    message: str
+    lowered_message: str
+    current_topic: Optional[str] = None
+    last_retrieval_topic: Optional[str] = None
+    recent_entities: Tuple[str, ...] = ()
+    pending_clarification_values: Tuple[str, ...] = ()
+    clarification_result: Mapping[str, Any] = field(default_factory=dict)
+    follow_up_intent: bool = False
+
+
+@dataclass(frozen=True)
+class ReferenceResolution:
+    resolved: bool
+    confidence: float
+    resolved_entity: Optional[str] = None
+    candidate_entities: Tuple[str, ...] = ()
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchRequest:
+    query: str
+    limit: int = 5
+    category: Optional[str] = None
+    query_context: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchMatch:
+    chunk: KnowledgeChunk
+    score: float
+    citation: Optional[Citation] = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class KnowledgeSearchResult:
+    query: str
+    retrieval_strategy: str
+    runtime_mode: str
+    plan: RetrievalPlan
+    recall: HybridRecallResult
+    evidence: EvidencePack
+    citations: Tuple[Citation, ...]
+    matches: Tuple[KnowledgeSearchMatch, ...]
+    metrics: Mapping[str, Any] = field(default_factory=dict)
+
+
 def coerce_tuple(values: Optional[Iterable[str]]) -> Tuple[str, ...]:
     if not values:
         return ()

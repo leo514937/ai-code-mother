@@ -4,26 +4,34 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 from ...domain.contracts import (
+    AnswerComposeRequest,
     ChatTurnCommand,
-    Citation,
+    CitationBuildRequest,
     ClarificationCard,
     ClarificationOption,
     ErrorPayload,
+    EvidenceEvaluationRequest,
     EvidencePack,
     FinalPayload,
-    GraphRuntimeMeta,
-    HybridRecallCandidate,
-    HybridRecallResult,
+    HybridRetrieveRequest,
+    MasteryUpdateCommand,
+    PersistSessionCommand,
     RagResult,
+    RecommendationQuery,
+    ReferenceResolutionRequest,
+    QueryRewriteRequest,
     RetrievalPlan,
     SseEnvelope,
-    ToolExecutionResult,
+    ToolExecutionCommand,
+    ToolNormalizationRequest,
+    ToolPlanningRequest,
+    TurnUnderstandingRequest,
     TurnRuntimeState,
-    TurnUnderstandingResult,
 )
 from ...domain.enums import IntentType, RagStatus, ToolExecutionStatus, TurnDecision
 from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
-from ...domain.state import GraphState, clone_graph_state
+from ...domain.state import GraphState
+from ...memory.models import MemoryCapabilityError
 
 
 class WorkflowNodeAdapter:
@@ -53,21 +61,30 @@ class WorkflowNodeAdapter:
             history_summary=runtime.history_summary,
             client_context=runtime.client_context,
         )
-        understanding = self.container.model_gateway.classify_turn(command, state)
+        understanding = self.container.model_gateway.classify_turn(
+            TurnUnderstandingRequest(command=command, persistent=state["persistent"])
+        )
         state["turn"] = self._apply_understanding(state["turn"], understanding)
         return state
 
     def resolve_reference(self, state: GraphState) -> GraphState:
-        resolver = getattr(self.container.rag_orchestrator, "resolve_reference", None)
-        if not callable(resolver):
-            return state
-        resolution = resolver(state)
+        persistent = state["persistent"]
+        resolution = self.container.rag_orchestrator.resolve_reference(
+            ReferenceResolutionRequest(
+                raw_query=state["turn"].raw_query,
+                current_topic=persistent.current_topic,
+                recent_entities=list(persistent.recent_entities),
+                clarification_result=dict(persistent.clarification_result),
+                pending_clarification=persistent.pending_clarification,
+                history_summary=persistent.history_summary,
+                topic_hint=state["runtime"].topic_hint,
+            )
+        )
         turn = state["turn"]
-        state["turn"] = self._apply_understanding(
-            turn,
-            (turn.understanding_result or TurnUnderstandingResult()).model_copy(
-                update={"reference_resolution": resolution}
-            ),
+        state["turn"] = turn.model_copy(
+            update={
+                "reference_resolution": resolution,
+            }
         )
         return state
 
@@ -87,14 +104,11 @@ class WorkflowNodeAdapter:
             ambiguity_type="intent" if low_intent else "reference",
             source_turn_id=state["runtime"].turn_id,
         )
-        state["turn"] = self._apply_understanding(
-            turn,
-            (turn.understanding_result or TurnUnderstandingResult()).model_copy(
-                update={
-                    "decision": TurnDecision.CLARIFY,
-                    "clarification_card": card,
-                }
-            ),
+        state["turn"] = turn.model_copy(
+            update={
+                "decision": TurnDecision.CLARIFY,
+                "clarification_card": card,
+            }
         )
         return state
 
@@ -182,14 +196,20 @@ class WorkflowNodeAdapter:
         return options[:3]
 
     def rewrite_query(self, state: GraphState) -> GraphState:
-        plan = self.container.rag_orchestrator.rewrite_query(state)
-        turn = state["turn"]
-        state["turn"] = self._apply_understanding(
-            turn.model_copy(update={"retrieval_plan": plan}),
-            (turn.understanding_result or TurnUnderstandingResult()).model_copy(
-                update={"retrieval_plan": plan}
-            ),
+        plan = self.container.rag_orchestrator.rewrite_query(
+            QueryRewriteRequest(
+                raw_query=state["turn"].raw_query,
+                intent=state["turn"].intent,
+                requested_output_style=state["turn"].requested_output_style,
+                reference_resolution=state["turn"].reference_resolution,
+                current_topic=state["persistent"].current_topic,
+                topic_hint=state["runtime"].topic_hint,
+                user_preferences=dict(state["persistent"].user_preferences),
+                base_filters={},
+            )
         )
+        turn = state["turn"]
+        state["turn"] = turn.model_copy(update={"retrieval_plan": plan})
         return state
 
     def hybrid_retrieve(self, state: GraphState) -> GraphState:
@@ -206,11 +226,7 @@ class WorkflowNodeAdapter:
             },
         )
 
-        orchestrator = self.container.rag_orchestrator
-        if callable(getattr(orchestrator, "hybrid_retrieve", None)):
-            hybrid = orchestrator.hybrid_retrieve(state)
-        else:
-            hybrid = self._legacy_hybrid_retrieve(orchestrator, plan)
+        hybrid = self.container.rag_orchestrator.hybrid_retrieve(HybridRetrieveRequest(plan=plan))
 
         runtime = state["runtime"]
         metrics = dict(runtime.metrics)
@@ -232,17 +248,14 @@ class WorkflowNodeAdapter:
             )
             return state
 
-        orchestrator = self.container.rag_orchestrator
-        evidence = None
-        evaluator = getattr(orchestrator, "evaluate_evidence", None)
-        if callable(evaluator):
-            evidence = evaluator(state)
-        elif callable(getattr(orchestrator, "_evaluate_evidence", None)):
-            evidence = orchestrator._evaluate_evidence(
-                plan,
-                [candidate.raw for candidate in hybrid.reranked_hits],
+        evidence = self.container.rag_orchestrator.evaluate_evidence(
+            EvidenceEvaluationRequest(
+                plan=plan,
+                hybrid_recall=hybrid,
+                intent=state["turn"].intent,
+                requested_output_style=state["turn"].requested_output_style,
             )
-
+        )
         evidence = evidence if isinstance(evidence, EvidencePack) else EvidencePack()
         retrieval_strategy = "dense+sparse+metadata->rrf->rerank->evidence"
         status = RagStatus.EMPTY
@@ -291,33 +304,7 @@ class WorkflowNodeAdapter:
         if evidence is None:
             return state
 
-        orchestrator = self.container.rag_orchestrator
-        citations: Iterable[Citation]
-        if callable(getattr(orchestrator, "build_citations_from_pack", None)):
-            citations = orchestrator.build_citations_from_pack(evidence)
-        elif callable(getattr(orchestrator, "build_citations", None)):
-            bridge_state = clone_graph_state(state)
-            bridge_state["turn"] = bridge_state["turn"].model_copy(
-                update={"rag_result": RagResult(evidence_pack=evidence)}
-            )
-            citations = orchestrator.build_citations(bridge_state)
-        else:
-            citation_fallback: List[Citation] = []
-            for item in evidence.items:
-                citation_fallback.append(
-                    Citation(
-                        chunk_id=item.chunk_id,
-                        document_id=item.document_id,
-                        source_type=item.metadata.get("source_type"),
-                        version=item.metadata.get("version"),
-                        score=item.score,
-                        title=item.metadata.get("topic"),
-                        locator=item.metadata.get("category"),
-                    )
-                )
-            citations = citation_fallback
-
-        citation_list = list(citations)
+        citation_list = list(self.container.rag_orchestrator.build_citations(CitationBuildRequest(evidence_pack=evidence)))
         rag_result = state["turn"].rag_result or RagResult(
             status=RagStatus.EMPTY,
             evidence_pack=evidence,
@@ -331,7 +318,19 @@ class WorkflowNodeAdapter:
         return state
 
     def tool_planner(self, state: GraphState) -> GraphState:
-        state["turn"] = state["turn"].model_copy(update={"tool_plan": self.container.tool_planner.plan(state)})
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "tool_plan": self.container.tool_planner.plan(
+                    ToolPlanningRequest(
+                        raw_query=state["turn"].raw_query,
+                        decision=state["turn"].decision,
+                        intent=state["turn"].intent,
+                        slots=dict(state["turn"].slots),
+                        current_topic=state["persistent"].current_topic,
+                    )
+                )
+            }
+        )
         return state
 
     def tool_executor(self, state: GraphState) -> GraphState:
@@ -347,7 +346,7 @@ class WorkflowNodeAdapter:
                 "input_summary": dict(plan.input_payload),
             },
         )
-        raw = self.container.tool_executor.execute(plan, state)
+        raw = self.container.tool_executor.execute(ToolExecutionCommand(selection=plan))
         state["turn"] = state["turn"].model_copy(update={"raw_tool_result": raw})
         return state
 
@@ -355,7 +354,7 @@ class WorkflowNodeAdapter:
         raw = state["turn"].raw_tool_result
         if raw is None:
             return state
-        normalized = self.container.tool_result_normalizer.normalize(raw, state)
+        normalized = self.container.tool_result_normalizer.normalize(ToolNormalizationRequest(result=raw))
         state["turn"] = state["turn"].model_copy(update={"tool_result": normalized})
         tool_plan = state["turn"].tool_plan
         return self._append_event(
@@ -375,13 +374,114 @@ class WorkflowNodeAdapter:
         )
 
     def persist_session(self, state: GraphState) -> GraphState:
-        return self._call_legacy_memory_handler(self.container.memory_service.persist_session, state)
+        runtime = state["runtime"]
+        turn = state["turn"]
+        persistent = state["persistent"]
+        try:
+            result = self.container.memory_service.persist_session(
+                PersistSessionCommand(
+                    trace_id=runtime.trace_id,
+                    session_id=runtime.session_id,
+                    turn_id=runtime.turn_id,
+                    user_id=runtime.user_id,
+                    workflow_version=runtime.workflow_version,
+                    raw_query=turn.raw_query,
+                    answer_text=turn.final_answer or "",
+                    resolved_topic=self._resolved_topic(state),
+                    intent=turn.intent,
+                    requested_output_style=turn.requested_output_style,
+                    tool_name=turn.tool_result.tool_name if turn.tool_result else None,
+                    quiz_score=self._extract_quiz_score(state),
+                    request_ts=runtime.request_ts,
+                    persistent=persistent,
+                    final_confidence=float(runtime.metrics.get("final_answer_confidence", 0.0) or 0.0),
+                )
+            )
+        except MemoryCapabilityError as exc:
+            return self._record_memory_capability_error(state, exc)
+        state["persistent"] = result.updated_context
+        memory_updates = result.memory_updates.model_copy(
+            update={
+                "extra": self._build_mastery_memory_extra(
+                    state,
+                    result.memory_updates.extra,
+                )
+            }
+        )
+        state["runtime"] = runtime.model_copy(
+            update={
+                "memory_updates": memory_updates,
+                "session_persisted": True,
+            }
+        )
+        return state
 
     def update_mastery(self, state: GraphState) -> GraphState:
-        return self._call_legacy_memory_handler(self.container.memory_service.update_mastery, state)
+        runtime = state["runtime"]
+        turn = state["turn"]
+        try:
+            result = self.container.memory_service.update_mastery(
+                MasteryUpdateCommand(
+                    trace_id=runtime.trace_id,
+                    session_id=runtime.session_id,
+                    user_id=runtime.user_id,
+                    turn_id=runtime.turn_id,
+                    raw_query=turn.raw_query,
+                    answer_text=turn.final_answer or "",
+                    resolved_topic=self._resolved_topic(state),
+                    intent=turn.intent,
+                    requested_output_style=turn.requested_output_style,
+                    tool_name=turn.tool_result.tool_name if turn.tool_result else None,
+                    quiz_score=self._extract_quiz_score(state),
+                    request_ts=runtime.request_ts,
+                    persistent=state["persistent"],
+                    memory_updates=runtime.memory_updates,
+                )
+            )
+        except MemoryCapabilityError as exc:
+            return self._record_memory_capability_error(state, exc)
+        metrics = dict(runtime.metrics)
+        metrics.update(result.metrics_patch)
+        memory_updates = runtime.memory_updates.model_copy(
+            update={
+                "topic_mastery": dict(result.topic_mastery),
+                "semantic_memory": dict(result.semantic_index),
+            }
+        )
+        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "memory_updates": memory_updates})
+        return state
 
     def recommend_next(self, state: GraphState) -> GraphState:
-        return self._call_legacy_memory_handler(self.container.memory_service.recommend_next, state)
+        recommendation = self.container.memory_service.recommend_next(
+            RecommendationQuery(
+                user_id=state["runtime"].user_id,
+                current_topic=self._resolved_topic(state),
+                recent_topics=list(state["persistent"].recent_entities),
+                user_preferences=dict(state["persistent"].user_preferences),
+                active_plan_id=state["persistent"].active_plan_id,
+                learning_mode=bool(state["persistent"].learning_mode),
+            )
+        )
+        state["turn"] = state["turn"].model_copy(update={"recommendation": recommendation})
+        return state
+
+    def compose_answer(self, state: GraphState) -> GraphState:
+        turn = state["turn"]
+        result = self.container.answer_composer.compose(
+            AnswerComposeRequest(
+                raw_query=turn.raw_query,
+                requested_output_style=turn.requested_output_style,
+                rag_result=turn.rag_result,
+                tool_result=turn.tool_result,
+                recommendation=turn.recommendation,
+            )
+        )
+        runtime = state["runtime"]
+        metrics = dict(runtime.metrics)
+        metrics["final_answer_confidence"] = result.confidence
+        state["runtime"] = runtime.model_copy(update={"metrics": metrics})
+        state["turn"] = turn.model_copy(update={"final_answer": result.answer_text})
+        return state
 
     def emit_final(self, state: GraphState) -> GraphState:
         runtime = state["runtime"]
@@ -456,7 +556,7 @@ class WorkflowNodeAdapter:
     def _apply_understanding(
         self,
         turn: TurnRuntimeState,
-        understanding: TurnUnderstandingResult,
+        understanding,
     ) -> TurnRuntimeState:
         return turn.model_copy(
             update={
@@ -468,105 +568,90 @@ class WorkflowNodeAdapter:
                 "retrieval_plan": turn.retrieval_plan or understanding.retrieval_plan,
                 "clarification_card": understanding.clarification_card,
                 "slots": dict(understanding.slots),
-                "understanding_result": understanding,
             }
         )
 
-    def _legacy_hybrid_retrieve(self, orchestrator, plan: RetrievalPlan) -> HybridRecallResult:
-        dense_hits = self._convert_hits(orchestrator._dense_retrieve(plan))
-        sparse_hits = self._convert_hits(orchestrator._sparse_retrieve(plan))
-        metadata_hits = self._convert_hits(orchestrator._metadata_retrieve(plan))
-        fused_hits = self._convert_hits(
-            orchestrator._rrf_merge(
-                [
-                    [candidate.raw for candidate in dense_hits],
-                    [candidate.raw for candidate in sparse_hits],
-                    [candidate.raw for candidate in metadata_hits],
-                ],
-                getattr(self.container.settings, "rrf_k", 60),
-            )
-        )
-        reranked_hits = self._convert_hits(
-            orchestrator._rerank(plan, [candidate.raw for candidate in fused_hits])
-        )
-        metrics = {
-            "dense_hit_count": len(dense_hits),
-            "sparse_hit_count": len(sparse_hits),
-            "metadata_hit_count": len(metadata_hits),
-            "retrieval_hit_count": len(reranked_hits),
-            "retrieval_top_score": reranked_hits[0].score if reranked_hits else 0.0,
-        }
-        return HybridRecallResult(
-            dense_hits=dense_hits,
-            sparse_hits=sparse_hits,
-            metadata_hits=metadata_hits,
-            fused_hits=fused_hits,
-            reranked_hits=reranked_hits,
-            metrics=metrics,
-        )
+    def _resolved_topic(self, state: GraphState) -> str | None:
+        persistent = state["persistent"]
+        turn = state["turn"]
+        if turn.reference_resolution and turn.reference_resolution.resolved_entity:
+            return turn.reference_resolution.resolved_entity
+        slot_topic = turn.slots.get("topic")
+        if isinstance(slot_topic, str) and slot_topic.strip():
+            return slot_topic.strip()
+        if persistent.current_topic:
+            return persistent.current_topic
+        topic_hint = turn.slots.get("topic_hint") or state["runtime"].topic_hint
+        if topic_hint:
+            return str(topic_hint)
+        return turn.raw_query or None
 
-    def _convert_hits(self, hits: Iterable[Dict[str, Any]]) -> List[HybridRecallCandidate]:
-        candidates: List[HybridRecallCandidate] = []
-        for item in hits:
-            channels = item.get("channels") or ([item["channel"]] if item.get("channel") else [])
-            candidates.append(
-                HybridRecallCandidate(
-                    chunk_id=item["chunk_id"],
-                    score=float(item.get("score", 0.0)),
-                    content=item.get("content"),
-                    document_id=item.get("topic"),
-                    chunk_type=item.get("chunk_type"),
-                    metadata={
-                        "topic": item.get("topic"),
-                        "category": item.get("category"),
-                        "subcategory": item.get("subcategory"),
-                        "source_type": item.get("source_type"),
-                        "version": item.get("version"),
-                    },
-                    channels=list(channels),
-                    raw=dict(item),
-                )
-            )
-        return candidates
-
-    def _call_legacy_memory_handler(self, handler, state: GraphState) -> GraphState:
-        compat_state = clone_graph_state(state)
-        compat_state["runtime"] = self._legacy_runtime_meta(compat_state["runtime"])
-        updated = handler(compat_state)
+    def _record_memory_capability_error(
+        self,
+        state: GraphState,
+        exc: MemoryCapabilityError,
+    ) -> GraphState:
         runtime = state["runtime"]
-        updated_runtime = updated["runtime"]
-        runtime_extra = dict(runtime.extra)
-        for key in ("memory_updates", "session_persisted"):
-            if key in updated_runtime.extra:
-                runtime_extra[key] = updated_runtime.extra[key]
-        state["persistent"] = updated["persistent"]
-        turn_extra = dict(state["turn"].extra)
-        turn_extra.update(updated["turn"].extra)
-        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
+        errors = list(runtime.errors)
+        errors.append(
+            build_error(
+                self._coerce_workflow_error_code(exc.code),
+                stage=exc.stage,
+                message=exc.message,
+                retryable=exc.retryable,
+                degraded_to=exc.degraded_to,
+            )
+        )
         state["runtime"] = runtime.model_copy(
             update={
-                "metrics": updated_runtime.metrics,
-                "errors": updated_runtime.errors,
-                "degrade_to": updated_runtime.degrade_to,
-                "extra": runtime_extra,
+                "errors": errors,
+                "degrade_to": exc.degraded_to or runtime.degrade_to,
             }
         )
         return state
 
-    def _legacy_runtime_meta(self, runtime: GraphRuntimeMeta) -> GraphRuntimeMeta:
-        extra = dict(runtime.extra)
+    @staticmethod
+    def _coerce_workflow_error_code(value: object) -> WorkflowErrorCode:
+        if isinstance(value, WorkflowErrorCode):
+            return value
+        try:
+            return WorkflowErrorCode(str(value))
+        except ValueError:
+            return WorkflowErrorCode.INTERNAL_ERROR
+
+    def _extract_quiz_score(self, state: GraphState) -> float | None:
+        tool_result = state["turn"].tool_result
+        if tool_result is None or tool_result.tool_name != "generateQuiz":
+            return None
+        data = tool_result.normalized_output.get("data", {})
+        score = data.get("score")
+        return float(score) if isinstance(score, (int, float)) else None
+
+    def _build_mastery_memory_extra(
+        self,
+        state: GraphState,
+        current_extra: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        turn = state["turn"]
+        runtime = state["runtime"]
+        evidence_count = len(turn.citations)
+        if turn.evidence_pack is not None:
+            evidence_count = max(evidence_count, len(turn.evidence_pack.items))
+        evidence_insufficient = any(
+            error.code == WorkflowErrorCode.EVIDENCE_INSUFFICIENT for error in runtime.errors
+        )
+        extra = dict(current_extra)
         extra.update(
             {
-                "user_id": runtime.user_id,
-                "response_mode": runtime.response_mode.value if runtime.response_mode else None,
-                "topic_hint": runtime.topic_hint,
-                "history_summary": runtime.history_summary,
-                "client_context": dict(runtime.client_context),
-                "workflow_version": runtime.workflow_version,
-                "request_ts": runtime.request_ts.isoformat(),
+                "evidence_count": evidence_count,
+                "was_confused": bool(extra.get("was_confused")) or evidence_insufficient,
+                "was_resolved": bool(turn.final_answer) and not evidence_insufficient,
+                "reference_resolved": bool(
+                    turn.reference_resolution is not None and turn.reference_resolution.resolved
+                ),
             }
         )
-        return runtime.model_copy(update={"extra": extra})
+        return extra
 
     def _build_final_payload(self, state: GraphState) -> FinalPayload:
         turn = state["turn"]
@@ -575,8 +660,8 @@ class WorkflowNodeAdapter:
         resolved_topic = persistent.current_topic
         if not resolved_topic and turn.reference_resolution:
             resolved_topic = turn.reference_resolution.resolved_entity
-        recommendation = turn.extra.get("recommendation")
-        memory_updates = runtime.extra.get("memory_updates", {})
+        recommendation = turn.recommendation
+        memory_updates = runtime.memory_updates.model_dump(mode="json") if runtime.memory_updates else {}
         final_confidence = runtime.metrics.get("final_answer_confidence", 0.0)
         rag_result = turn.rag_result
         tool_result = turn.tool_result
@@ -587,7 +672,7 @@ class WorkflowNodeAdapter:
             resolved_topic=resolved_topic,
             retrieval_strategy=rag_result.retrieval_strategy if rag_result is not None else None,
             memory_updates=memory_updates,
-            recommendation=recommendation,
+            recommendation=recommendation.model_dump(mode="json") if recommendation is not None else None,
             confidence=final_confidence,
             intent=turn.intent,
             requested_output_style=turn.requested_output_style,

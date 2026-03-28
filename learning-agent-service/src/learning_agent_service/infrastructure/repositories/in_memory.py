@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Tuple
 
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
 from learning_agent_service.domain.protocols import SessionContextPort
+from learning_agent_service.infrastructure.observability.outbox import (
+    AsyncLogWriteRequest,
+    TypedAsyncLogEvent,
+    normalize_async_log_request,
+)
 
 
 @dataclass
@@ -18,6 +23,12 @@ class InMemorySessionContextStore(SessionContextPort):
 
     def save(self, context: PersistentSessionContext, runtime: GraphRuntimeMeta) -> None:
         self.sessions[(runtime.session_id, runtime.user_id)] = deepcopy(context)
+
+    def load_any(self, session_id: str) -> PersistentSessionContext:
+        for (stored_session_id, _), context in self.sessions.items():
+            if stored_session_id == session_id:
+                return deepcopy(context)
+        return PersistentSessionContext()
 
 
 @dataclass
@@ -56,5 +67,18 @@ class InMemoryTopicMasteryStore:
 class InMemoryAsyncLogStore:
     entries: List[Dict[str, Any]] = field(default_factory=list)
 
-    def append(self, entry: Dict[str, Any]) -> None:
-        self.entries.append(deepcopy(entry))
+    def append(self, entry: Dict[str, Any] | AsyncLogWriteRequest | TypedAsyncLogEvent) -> None:
+        normalized = normalize_async_log_request(entry)
+        self.entries.append(
+            deepcopy(
+                {
+                    "aggregate_type": normalized.aggregate_type,
+                    "aggregate_id": normalized.aggregate_id,
+                    "event_type": normalized.event_type,
+                    "dedupe_key": normalized.dedupe_key,
+                    "payload": dict(normalized.payload),
+                    "trace_id": normalized.trace_id,
+                    "available_at": normalized.available_at.isoformat(),
+                }
+            )
+        )

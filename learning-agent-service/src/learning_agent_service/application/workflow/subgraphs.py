@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-from ...domain.contracts import (
-    NormalizedToolResult,
-    RagResult,
-    ToolExecutionResult,
-    TurnUnderstandingResult,
-)
+from ...domain.contracts import NormalizedToolResult, RagResult, ToolExecutionResult
 from ...domain.enums import RagStatus, ToolExecutionStatus, TurnDecision
 from ...domain.state import GraphState
 from .services import RagSubgraphServices, ToolSubgraphServices, UnderstandTurnServices
@@ -14,55 +9,6 @@ from .services import RagSubgraphServices, ToolSubgraphServices, UnderstandTurnS
 CLARIFY_DECISIONS = {TurnDecision.CLARIFY}
 RAG_DECISIONS = {TurnDecision.RETRIEVE_THEN_ANSWER, TurnDecision.TOOL_THEN_ANSWER}
 TOOL_DECISIONS = {TurnDecision.TOOL_THEN_ANSWER}
-
-
-def _sync_turn_from_understanding(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    understanding = turn.understanding_result
-    if understanding is None:
-        return state
-    state["turn"] = turn.model_copy(
-        update={
-            "decision": understanding.decision,
-            "intent": understanding.intent,
-            "intent_confidence": understanding.intent_confidence,
-            "requested_output_style": understanding.requested_output_style,
-            "reference_resolution": understanding.reference_resolution,
-            "retrieval_plan": turn.retrieval_plan or understanding.retrieval_plan,
-            "clarification_card": understanding.clarification_card,
-            "slots": dict(understanding.slots),
-        }
-    )
-    return state
-
-
-def _sync_understanding_from_turn(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    understanding = turn.understanding_result or TurnUnderstandingResult()
-    state["turn"] = turn.model_copy(
-        update={
-            "understanding_result": understanding.model_copy(
-                update={
-                    "decision": turn.decision,
-                    "intent": turn.intent or understanding.intent,
-                    "intent_confidence": turn.intent_confidence,
-                    "requested_output_style": turn.requested_output_style,
-                    "reference_resolution": turn.reference_resolution,
-                    "retrieval_plan": turn.retrieval_plan,
-                    "clarification_card": turn.clarification_card,
-                    "slots": dict(turn.slots),
-                }
-            )
-        }
-    )
-    return state
-
-
-def _ensure_understanding_result(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    if turn.understanding_result is None:
-        state["turn"] = turn.model_copy(update={"understanding_result": TurnUnderstandingResult(decision=turn.decision)})
-    return _sync_understanding_from_turn(state)
 
 
 def _ensure_rag_result(state: GraphState) -> GraphState:
@@ -113,25 +59,12 @@ def _ensure_raw_tool_result(state: GraphState) -> GraphState:
 
 def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> GraphState:
     state = services.parse_intent_slots(state)
-    state = _ensure_understanding_result(state)
-    state = _sync_turn_from_understanding(state)
-
     state = services.resolve_reference(state)
-    state = _ensure_understanding_result(state)
-    state = _sync_turn_from_understanding(state)
-
     state = services.ambiguity_check(state)
-    state = _ensure_understanding_result(state)
-    state = _sync_turn_from_understanding(state)
-
     if state["turn"].decision in CLARIFY_DECISIONS:
         return state
-
     if state["turn"].decision in RAG_DECISIONS:
         state = services.rewrite_query(state)
-        state = _ensure_understanding_result(state)
-        state = _sync_turn_from_understanding(state)
-
     return state
 
 
@@ -148,7 +81,6 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphS
 def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> GraphState:
     state = services.tool_planner(state)
     selection = state["turn"].tool_plan
-
     if selection is None or not selection.should_execute:
         state = _ensure_raw_tool_result(state)
     else:

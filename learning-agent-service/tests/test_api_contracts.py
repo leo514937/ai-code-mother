@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import unittest
@@ -7,12 +7,14 @@ from datetime import datetime
 import _bootstrap  # noqa: F401
 from pydantic import ValidationError
 
+import app as app_module
 from learning_agent_service.api.contracts import (
     ApiResponse,
     ChatStreamRequest,
+    Citation,
     ClarificationCardPayload,
     ClarificationOptionPayload,
-    Citation,
+    EventType,
     FinalPayload,
     QuizGenerateRequest,
     QuizGenerateResponse,
@@ -21,20 +23,28 @@ from learning_agent_service.api.contracts import (
     SseEnvelope,
     StudyPlanGenerateResponse,
 )
-from learning_agent_service.api.contracts import EventType
 from learning_agent_service.api.router import create_api_router
-import app as app_module
 
 
 class _MockService:
     def run_stream(self, request: ChatStreamRequest):
+        now = datetime.utcnow()
         return [
+            SseEnvelope(
+                event_type=EventType.ACK,
+                trace_id=request.trace_id,
+                session_id=request.session_id,
+                turn_id=request.turn_id or "turn-1",
+                timestamp=now,
+                workflow_version="learn-agent/v1",
+                payload={"message": "accepted", "accepted_at": now},
+            ),
             SseEnvelope(
                 event_type=EventType.FINAL,
                 trace_id=request.trace_id,
                 session_id=request.session_id,
                 turn_id=request.turn_id or "turn-1",
-                timestamp=datetime.utcnow(),
+                timestamp=now,
                 workflow_version="learn-agent/v1",
                 payload={
                     "answer_text": "ok",
@@ -44,7 +54,7 @@ class _MockService:
                     "memory_updates": {},
                     "metrics": {},
                 },
-            )
+            ),
         ]
 
     def generate_quiz(self, request: QuizGenerateRequest) -> QuizGenerateResponse:
@@ -61,6 +71,21 @@ class _MockService:
 
 
 class ApiContractsTestCase(unittest.TestCase):
+    def test_public_event_type_enum_only_contains_runtime_supported_events(self) -> None:
+        self.assertEqual(
+            {event.value for event in EventType},
+            {
+                "ack",
+                "clarification_card",
+                "retrieval_started",
+                "retrieval_result",
+                "tool_call",
+                "tool_result",
+                "final",
+                "error",
+            },
+        )
+
     def test_chat_stream_request_requires_message(self) -> None:
         with self.assertRaises(ValidationError):
             ChatStreamRequest(
@@ -132,9 +157,11 @@ class ApiContractsTestCase(unittest.TestCase):
                     session_id="s1",
                     trace_id="t1",
                     turn_id="turn-1",
-                    message="帮我解释下 AOP",
+                    message="帮我解释一下 AOP",
                 )
             )
         )
         chunks = list(response.body_iterator)
-        self.assertTrue(any("event: final" in chunk for chunk in chunks))
+        self.assertEqual(len(chunks), 2)
+        self.assertIn("event: ack", chunks[0])
+        self.assertIn("event: final", chunks[1])

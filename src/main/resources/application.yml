@@ -102,3 +102,11 @@ management:
   endpoint:
     health:
       show-details: always
+agent:
+  sidebar:
+    enabled: false
+  python:
+    base-url: http://127.0.0.1:8000
+    internal-token: 'replace-with-internal-token'
+    connect-timeout-ms: 3000
+    read-timeout-ms: 60000

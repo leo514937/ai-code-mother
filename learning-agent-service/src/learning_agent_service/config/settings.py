@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     workflow_version: str = "learn-agent/v1"
     api_prefix: str = "/internal/v1"
     default_response_mode: str = "detailed"
+    internal_api_token: str = ""
     prefer_real_adapters: bool = True
     allow_in_memory_fallback: bool = True
 
@@ -131,6 +132,7 @@ class Settings(BaseSettings):
         environment = data.pop("environment", _env("LEARNING_AGENT_ENV", "development"))
         debug = data.pop("debug", _env_bool("LEARNING_AGENT_DEBUG", False))
         workflow_version = data.pop("workflow_version", _env("LEARNING_AGENT_WORKFLOW_VERSION", "learn-agent/v1"))
+        internal_api_token = data.pop("internal_api_token", _env("LEARNING_AGENT_INTERNAL_API_TOKEN", "")) or ""
         request_timeout_seconds = float(
             data.pop("request_timeout_seconds", _env("LEARNING_AGENT_REQUEST_TIMEOUT_SECONDS", 30.0))
         )
@@ -248,6 +250,7 @@ class Settings(BaseSettings):
         data.setdefault("environment", data["app"].environment)
         data.setdefault("debug", data["app"].debug)
         data.setdefault("workflow_version", data["app"].workflow_version)
+        data.setdefault("internal_api_token", internal_api_token)
         data.setdefault("prefer_real_adapters", data["app"].prefer_real_adapters)
         data.setdefault("allow_in_memory_fallback", data["app"].allow_in_memory_fallback)
         super().__init__(**data)
@@ -261,6 +264,8 @@ class Settings(BaseSettings):
             data["openai"]["api_key"] = "***"
         if data.get("qdrant", {}).get("api_key"):
             data["qdrant"]["api_key"] = "***"
+        if data.get("internal_api_token"):
+            data["internal_api_token"] = "***"
         return data
 
 

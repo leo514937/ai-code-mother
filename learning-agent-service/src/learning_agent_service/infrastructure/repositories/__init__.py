@@ -17,10 +17,15 @@ from .records import (
 )
 from .runtime_adapters import (
     AdapterStatus,
+    DurableLearningPlanStore,
+    DurablePreferenceStore,
     DurableTopicMasteryStore,
+    NoOpSemanticMemoryStore,
     OutboxAsyncLogStore,
     RedisSessionContextStore,
+    RuntimeComponentMode,
     RuntimeDependencyStatus,
+    RuntimeProfile,
 )
 from .tool_logs import ToolInvocationLogRepository
 from .topic_mastery import TopicMasteryRepository
@@ -29,17 +34,22 @@ __all__ = [
     "AdapterStatus",
     "ClarificationRecordEntry",
     "ClarificationRecordRepository",
+    "DurableLearningPlanStore",
+    "DurablePreferenceStore",
     "DurableTopicMasteryStore",
     "KnowledgeDocumentRecord",
     "KnowledgeDocumentVersionRecord",
     "KnowledgeGovernanceRepository",
     "LearningPlanItemRecord",
     "LearningPlanRepository",
+    "NoOpSemanticMemoryStore",
     "OutboxAsyncLogStore",
     "OutboxEventRecord",
     "OutboxRepository",
     "RedisSessionContextStore",
+    "RuntimeComponentMode",
     "RuntimeDependencyStatus",
+    "RuntimeProfile",
     "ToolInvocationLogEntry",
     "ToolInvocationLogRepository",
     "TopicMasteryRecord",

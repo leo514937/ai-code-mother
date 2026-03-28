@@ -3,23 +3,45 @@ from __future__ import annotations
 from typing import Iterable, Optional, Protocol
 
 from .contracts import (
+    AnswerComposeRequest,
+    AnswerComposeResult,
     ChatTurnCommand,
     Citation,
+    CitationBuildRequest,
+    ErrorPayload,
+    EvidenceEvaluationRequest,
+    EvidencePack,
+    FinalPayload,
     GraphRuntimeMeta,
+    HybridRecallResult,
+    HybridRetrieveRequest,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResult,
+    MasteryUpdateCommand,
+    MasteryUpdateResult,
     NormalizedToolResult,
+    PersistSessionCommand,
+    PersistSessionResult,
     PersistentSessionContext,
-    RagResult,
+    QueryRewriteRequest,
+    RecommendationQuery,
+    RecommendationResult,
+    ReferenceResolutionRequest,
+    ReferenceResolutionResult,
     RetrievalPlan,
     SseEnvelope,
+    ToolExecutionCommand,
     ToolExecutionResult,
+    ToolNormalizationRequest,
+    ToolPlanningRequest,
     ToolSelection,
+    TurnUnderstandingRequest,
     TurnUnderstandingResult,
 )
-from .state import GraphState
 
 
 class ModelGatewayPort(Protocol):
-    def classify_turn(self, command: ChatTurnCommand, state: GraphState) -> TurnUnderstandingResult:
+    def classify_turn(self, request: TurnUnderstandingRequest) -> TurnUnderstandingResult:
         ...
 
 
@@ -30,49 +52,76 @@ class SessionContextPort(Protocol):
     def save(self, context: PersistentSessionContext, runtime: GraphRuntimeMeta) -> None:
         ...
 
+    def load_any(self, session_id: str) -> PersistentSessionContext:
+        ...
+
 
 class RAGOrchestratorPort(Protocol):
-    def rewrite_query(self, state: GraphState) -> RetrievalPlan:
+    def resolve_reference(self, request: ReferenceResolutionRequest) -> ReferenceResolutionResult:
         ...
 
-    def run(self, state: GraphState) -> RagResult:
+    def rewrite_query(self, request: QueryRewriteRequest) -> RetrievalPlan:
         ...
 
-    def build_citations(self, state: GraphState) -> Iterable[Citation]:
+    def hybrid_retrieve(self, request: HybridRetrieveRequest) -> HybridRecallResult:
+        ...
+
+    def evaluate_evidence(self, request: EvidenceEvaluationRequest) -> EvidencePack:
+        ...
+
+    def build_citations(self, request: CitationBuildRequest) -> Iterable[Citation]:
+        ...
+
+    def search_knowledge(self, request: KnowledgeSearchRequest) -> KnowledgeSearchResult:
+        ...
+
+    def get_knowledge_detail(self, topic: str) -> dict:
         ...
 
 
 class MemoryServicePort(Protocol):
-    def persist_session(self, state: GraphState) -> GraphState:
+    def persist_session(self, command: PersistSessionCommand) -> PersistSessionResult:
         ...
 
-    def update_mastery(self, state: GraphState) -> GraphState:
+    def update_mastery(self, command: MasteryUpdateCommand) -> MasteryUpdateResult:
         ...
 
-    def recommend_next(self, state: GraphState) -> GraphState:
+    def recommend_next(self, query: RecommendationQuery) -> Optional[RecommendationResult]:
+        ...
+
+    def load_any(self, session_id: str) -> PersistentSessionContext:
         ...
 
 
 class ToolPlannerPort(Protocol):
-    def plan(self, state: GraphState) -> ToolSelection:
+    def plan(self, request: ToolPlanningRequest) -> Optional[ToolSelection]:
+        ...
+
+    def plan_from_name(self, tool_name: str, input_payload: dict) -> ToolSelection:
         ...
 
 
 class ToolExecutorPort(Protocol):
-    def execute(self, selection: ToolSelection, state: GraphState) -> ToolExecutionResult:
+    def execute(self, command: ToolExecutionCommand) -> ToolExecutionResult:
         ...
 
 
 class ToolResultNormalizerPort(Protocol):
-    def normalize(self, result: ToolExecutionResult, state: GraphState) -> NormalizedToolResult:
+    def normalize(self, request: ToolNormalizationRequest) -> NormalizedToolResult:
         ...
 
 
 class AnswerComposerPort(Protocol):
-    def compose(self, state: GraphState) -> GraphState:
+    def compose(self, request: AnswerComposeRequest) -> AnswerComposeResult:
         ...
 
 
 class FinalizerPort(Protocol):
-    def finalize(self, state: GraphState) -> Optional[SseEnvelope]:
+    def finalize(
+        self,
+        *,
+        terminal_event: str,
+        payload: FinalPayload | ErrorPayload | dict,
+        runtime: GraphRuntimeMeta,
+    ) -> Optional[SseEnvelope]:
         ...

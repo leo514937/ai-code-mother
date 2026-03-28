@@ -11,10 +11,22 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
 from learning_agent_service.domain.protocols import SessionContextPort
 from learning_agent_service.infrastructure.db.redis import RedisRuntime
-from learning_agent_service.infrastructure.observability.outbox import AsyncLogWriteRequest
+from learning_agent_service.infrastructure.observability.outbox import (
+    AsyncLogWriteRequest,
+    TypedAsyncLogEvent,
+    normalize_async_log_request,
+)
+from learning_agent_service.memory.models import SemanticMemoryFact
 
 from .outbox import OutboxRepository
-from .records import OutboxEventRecord, TopicMasteryRecord
+from .records import (
+    LearningPlanItemRecord,
+    OutboxEventRecord,
+    TopicMasteryRecord,
+    UserPreferenceProfileRecord,
+)
+from .learning_plan import LearningPlanRepository
+from .preferences import UserPreferenceRepository
 from .topic_mastery import TopicMasteryRepository
 
 
@@ -61,6 +73,9 @@ class RedisSessionContextStore(SessionContextPort):
             self.runtime.client.set(clarification_key, json.dumps(context.clarification_result, default=_json_default))
         else:
             self.runtime.client.delete(clarification_key)
+
+    def load_any(self, session_id: str) -> PersistentSessionContext:
+        return self.load(session_id, "anonymous")
 
 
 @dataclass
@@ -154,20 +169,112 @@ class OutboxAsyncLogStore:
     repository: OutboxRepository
     aggregate_type: str = "async_log"
 
-    def append(self, entry: Dict[str, Any]) -> None:
-        session_id = str(entry.get("session_id") or "unknown-session")
-        turn_id = str(entry.get("turn_id") or "unknown-turn")
-        event_type = str(entry.get("event_type") or "log.appended")
-        dedupe_key = "%s:%s:%s" % (session_id, turn_id, event_type)
-        record = OutboxEventRecord(
-            aggregate_type=self.aggregate_type,
-            aggregate_id="%s:%s" % (session_id, turn_id),
-            event_type=event_type,
-            dedupe_key=dedupe_key,
-            payload=deepcopy(entry),
-            trace_id=entry.get("trace_id"),
-        )
+    def append(self, entry: Mapping[str, Any] | AsyncLogWriteRequest | TypedAsyncLogEvent) -> None:
+        request = normalize_async_log_request(entry)
+        if request.aggregate_type == "async_log" and self.aggregate_type != "async_log":
+            request = AsyncLogWriteRequest(
+                aggregate_type=self.aggregate_type,
+                aggregate_id=request.aggregate_id,
+                event_type=request.event_type,
+                dedupe_key=request.dedupe_key,
+                payload=deepcopy(request.payload),
+                trace_id=request.trace_id,
+                available_at=request.available_at,
+            )
+        record = request.to_record()
         self.repository.enqueue(record)
+
+
+@dataclass
+class NoOpSemanticMemoryStore:
+    """Explicit no-op semantic memory adapter used when no real backend is wired."""
+
+    indexed_topics: Dict[Tuple[str, str], bool] = field(default_factory=dict)
+
+    def search(self, user_id: str, query: str, limit: int = 5) -> Sequence[SemanticMemoryFact]:
+        return ()
+
+    def upsert(self, user_id: str, fact: SemanticMemoryFact) -> None:
+        return None
+
+    def mark_indexed_state(self, user_id: str, topic: str, indexed: bool) -> None:
+        self.indexed_topics[(user_id, topic)] = indexed
+
+
+@dataclass
+class DurablePreferenceStore:
+    repository: UserPreferenceRepository
+
+    def get(self, user_id: str) -> Any:
+        model = self.repository.get(user_id)
+        if model is None:
+            return None
+        return UserPreferenceProfileRecord(
+            user_id=model.user_id,
+            answer_style=model.answer_style,
+            explanation_depth=model.explanation_depth,
+            prefer_code_examples=bool(model.prefer_code_examples),
+            extra=dict(model.extra or {}),
+        )
+
+    def upsert(self, payload: Mapping[str, Any] | Any) -> Mapping[str, Any]:
+        if isinstance(payload, Mapping):
+            user_id = str(payload.get("user_id") or "anonymous")
+            answer_style = payload.get("answer_style")
+            explanation_depth = payload.get("explanation_depth")
+            prefer_code_examples = bool(payload.get("prefer_code_examples", False))
+            extra = dict(payload.get("extra", {}))
+        else:
+            user_id = str(getattr(payload, "user_id", "anonymous"))
+            answer_style = getattr(payload, "answer_style", None)
+            explanation_depth = getattr(payload, "explanation_depth", None)
+            prefer_code_examples = bool(getattr(payload, "prefer_code_examples", False))
+            extra = dict(getattr(payload, "extra", {}) or {})
+        record = UserPreferenceProfileRecord(
+            user_id=user_id,
+            answer_style=answer_style,
+            explanation_depth=explanation_depth,
+            prefer_code_examples=prefer_code_examples,
+            extra=extra,
+        )
+        model = self.repository.upsert(record)
+        return {
+            "user_id": model.user_id,
+            "answer_style": model.answer_style,
+            "explanation_depth": model.explanation_depth,
+            "prefer_code_examples": bool(model.prefer_code_examples),
+            "extra": dict(model.extra or {}),
+        }
+
+
+@dataclass
+class DurableLearningPlanStore:
+    repository: LearningPlanRepository
+
+    def list_for_plan(self, plan_id: str) -> Sequence[Any]:
+        return self.repository.list_by_plan("", plan_id)
+
+    def list_by_plan(self, user_id: str, plan_id: str) -> Sequence[Any]:
+        return self.repository.list_by_plan(user_id, plan_id)
+
+    def upsert_items(self, items: Iterable[Mapping[str, Any]]) -> Sequence[Any]:
+        records = [
+            LearningPlanItemRecord(
+                plan_id=str(item.get("plan_id") or ""),
+                item_id=str(item.get("item_id") or ""),
+                user_id=str(item.get("user_id") or ""),
+                topic=str(item.get("topic") or ""),
+                title=str(item.get("title") or ""),
+                description=item.get("description"),
+                sequence_no=int(item.get("sequence_no") or 0),
+                status=str(item.get("status") or "pending"),
+                due_at=item.get("due_at"),
+                source_turn_id=item.get("source_turn_id"),
+                extra=dict(item.get("extra", {})),
+            )
+            for item in items
+        ]
+        return self.repository.upsert_items(records)
 
 
 @dataclass(frozen=True)
@@ -200,4 +307,34 @@ class RuntimeDependencyStatus:
             ],
             "bootstrap_errors": list(self.bootstrap_errors),
             "fallbacks": list(self.fallback_names),
+        }
+
+
+@dataclass(frozen=True)
+class RuntimeComponentMode:
+    name: str
+    mode: str
+    ready: bool
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    name: str
+    components: Tuple[RuntimeComponentMode, ...]
+    bootstrap_errors: Tuple[Tuple[str, str], ...] = ()
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "profile": self.name,
+            "components": [
+                {
+                    "name": component.name,
+                    "mode": component.mode,
+                    "ready": component.ready,
+                    "details": dict(component.details),
+                }
+                for component in self.components
+            ],
+            "bootstrap_errors": list(self.bootstrap_errors),
         }

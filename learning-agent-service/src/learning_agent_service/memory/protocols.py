@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Protocol, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
-from learning_agent_service.domain.contracts import (
-    GraphRuntimeMeta,
-    PersistentSessionContext as DomainPersistentSessionContext,
-)
+from learning_agent_service.domain.contracts import PersistentSessionContext as DomainPersistentSessionContext
 
-from .models import SemanticMemoryFact
+from .models import AsyncLogEvent, PreferenceProfileWrite, SemanticMemoryFact, SessionPersistenceContext
 
 
 class SessionStore(Protocol):
     def load(self, session_id: str, user_id: str) -> DomainPersistentSessionContext:
         ...
 
-    def save(self, context: DomainPersistentSessionContext, runtime: GraphRuntimeMeta) -> None:
+    def save(self, context: DomainPersistentSessionContext, runtime: SessionPersistenceContext) -> None:
+        ...
+
+
+@runtime_checkable
+class SupportsLoadAny(Protocol):
+    def load_any(self, session_id: str) -> DomainPersistentSessionContext:
         ...
 
 
@@ -33,20 +37,28 @@ class PreferenceStore(Protocol):
     def get(self, user_id: str) -> Any:
         ...
 
-    def upsert(self, profile: Any) -> Any:
+    def upsert(self, profile: PreferenceProfileWrite) -> Any:
         ...
 
 
-class LearningPlanStore(Protocol):
+@runtime_checkable
+class SupportsListForPlan(Protocol):
     def list_for_plan(self, plan_id: str) -> Sequence[Any]:
         ...
 
+
+@runtime_checkable
+class SupportsListByPlan(Protocol):
     def list_by_plan(self, user_id: str, plan_id: str) -> Sequence[Any]:
         ...
 
 
+class LearningPlanStore(SupportsListByPlan, Protocol):
+    pass
+
+
 class AsyncLogStore(Protocol):
-    def append(self, entry: Mapping[str, Any]) -> None:
+    def append(self, entry: AsyncLogEvent | Mapping[str, Any]) -> None:
         ...
 
 
@@ -59,3 +71,17 @@ class SemanticMemoryStore(Protocol):
 
     def mark_indexed_state(self, user_id: str, topic: str, indexed: bool) -> None:
         ...
+
+
+@dataclass
+class NoOpSemanticMemoryStore:
+    indexed_topics: dict[tuple[str, str], bool] = field(default_factory=dict)
+
+    def search(self, user_id: str, query: str, limit: int = 5) -> Sequence[SemanticMemoryFact]:
+        return ()
+
+    def upsert(self, user_id: str, fact: SemanticMemoryFact) -> None:
+        return None
+
+    def mark_indexed_state(self, user_id: str, topic: str, indexed: bool) -> None:
+        self.indexed_topics[(user_id, topic)] = indexed

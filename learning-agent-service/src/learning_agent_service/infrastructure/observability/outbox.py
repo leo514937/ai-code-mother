@@ -1,10 +1,10 @@
-﻿"""Helpers for packaging async log writes into outbox events."""
+"""Helpers for packaging async log writes into typed outbox events."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from learning_agent_service.infrastructure.repositories.records import OutboxEventRecord
 
@@ -33,6 +33,60 @@ class AsyncLogWriteRequest:
             trace_id=self.trace_id,
             available_at=self.available_at,
         )
+
+
+@dataclass(frozen=True)
+class TypedAsyncLogEvent:
+    """Typed async log envelope used by composition-root and runtime adapters."""
+
+    aggregate_type: str
+    aggregate_id: str
+    event_type: str
+    dedupe_key: str
+    payload: Dict[str, Any] = field(default_factory=dict)
+    trace_id: Optional[str] = None
+    available_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def to_request(self) -> AsyncLogWriteRequest:
+        return AsyncLogWriteRequest(
+            aggregate_type=self.aggregate_type,
+            aggregate_id=self.aggregate_id,
+            event_type=self.event_type,
+            dedupe_key=self.dedupe_key,
+            payload=dict(self.payload),
+            trace_id=self.trace_id,
+            available_at=self.available_at,
+        )
+
+
+def normalize_async_log_request(
+    entry: Mapping[str, Any] | AsyncLogWriteRequest | TypedAsyncLogEvent,
+) -> AsyncLogWriteRequest:
+    """Normalize legacy dict payloads and typed events into one outbox request type."""
+
+    if isinstance(entry, AsyncLogWriteRequest):
+        return entry
+    if isinstance(entry, TypedAsyncLogEvent):
+        return entry.to_request()
+
+    session_id = str(entry.get("session_id") or "unknown-session")
+    turn_id = str(entry.get("turn_id") or "unknown-turn")
+    event_type = str(entry.get("event_type") or "log.appended")
+    dedupe_key = str(entry.get("dedupe_key") or "%s:%s:%s" % (session_id, turn_id, event_type))
+    aggregate_type = str(entry.get("aggregate_type") or "async_log")
+    aggregate_id = str(entry.get("aggregate_id") or "%s:%s" % (session_id, turn_id))
+    available_at = entry.get("available_at")
+    if not isinstance(available_at, datetime):
+        available_at = datetime.now(timezone.utc)
+    return AsyncLogWriteRequest(
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        event_type=event_type,
+        dedupe_key=dedupe_key,
+        payload=dict(entry),
+        trace_id=entry.get("trace_id"),
+        available_at=available_at,
+    )
 
 
 def build_audit_outbox_request(envelope: AuditEnvelope, aggregate_type: str, aggregate_id: str) -> AsyncLogWriteRequest:

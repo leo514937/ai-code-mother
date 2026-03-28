@@ -1,30 +1,52 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from learning_agent_service.config import Settings
-from learning_agent_service.domain import GraphState, PersistentSessionContext as DomainPersistentSessionContext
-from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
-from learning_agent_service.infrastructure.repositories.records import UserPreferenceProfileRecord
+from learning_agent_service.domain import (
+    MasteryUpdateCommand,
+    MasteryUpdateResult,
+    MemoryUpdateSummary,
+    PersistSessionCommand,
+    PersistSessionResult,
+    PersistentSessionContext as DomainPersistentSessionContext,
+    RecommendationQuery,
+    RecommendationResult,
+)
+from learning_agent_service.domain.errors import WorkflowErrorCode
 
 from .canonical import CanonicalTopicResolver
 from .mastery import MasteryUpdateInput, TopicMasteryUpdater
 from .models import (
+    AsyncLogEvent,
     ExplicitUserSignals,
     MasteryComputation,
+    MemoryCapabilityError,
     MemoryPromotionInput,
     PersistSessionPlan,
     PersistentSessionContext as MemoryPersistentSessionContext,
+    PreferenceProfileWrite,
     RecommendationContext,
-    RecommendationSnapshot,
     SemanticIndexUpdate,
+    SessionPersistenceContext,
     TopicMasteryRecord,
     UserPreferenceProfile,
 )
 from .promotion import MemoryPromotionPolicy
-from .protocols import AsyncLogStore, LearningPlanStore, PreferenceStore, SemanticMemoryStore, SessionStore, TopicMasteryStore
+from .protocols import (
+    AsyncLogStore,
+    LearningPlanStore,
+    NoOpSemanticMemoryStore,
+    PreferenceStore,
+    SemanticMemoryStore,
+    SessionStore,
+    SupportsListByPlan,
+    SupportsListForPlan,
+    SupportsLoadAny,
+    TopicMasteryStore,
+)
 from .recommend import RecommendationService
 
 
@@ -36,213 +58,287 @@ class MemoryService:
     settings: Settings
     preference_store: Optional[PreferenceStore] = None
     learning_plan_store: Optional[LearningPlanStore] = None
-    semantic_memory_store: Optional[SemanticMemoryStore] = None
+    semantic_memory_store: SemanticMemoryStore = field(default_factory=NoOpSemanticMemoryStore)
     promotion_policy: MemoryPromotionPolicy = field(default_factory=MemoryPromotionPolicy)
     mastery_updater: TopicMasteryUpdater = field(default_factory=TopicMasteryUpdater)
     recommendation_service: RecommendationService = field(default_factory=RecommendationService)
     topic_resolver: CanonicalTopicResolver = field(default_factory=CanonicalTopicResolver)
 
-    def persist_session(self, state: GraphState) -> GraphState:
-        persistent = state["persistent"]
-        turn = state["turn"]
-        runtime = state["runtime"]
-        resolved_topic = self._resolve_topic(state)
-        current_preferences = self._preference_profile(runtime.user_id, persistent.user_preferences)
-        current_mastery = self._load_current_mastery(runtime.user_id, resolved_topic)
+    def __post_init__(self) -> None:
+        if self.semantic_memory_store is None:
+            self.semantic_memory_store = NoOpSemanticMemoryStore()
+
+    def persist_session(self, command: PersistSessionCommand) -> PersistSessionResult:
+        persistent = command.persistent
+        resolved_topic = self._resolve_topic(
+            command.resolved_topic,
+            persistent.current_topic,
+            command.raw_query,
+        )
+        current_preferences = self._preference_profile(command.user_id, persistent.user_preferences)
+        current_mastery = self._load_current_mastery(command.user_id, resolved_topic)
 
         promotion_input = MemoryPromotionInput(
-            session_id=runtime.session_id,
-            turn_id=runtime.turn_id,
-            user_id=runtime.user_id,
-            query=turn.raw_query,
-            answer_text=turn.final_answer or "",
+            session_id=command.session_id,
+            turn_id=command.turn_id,
+            user_id=command.user_id,
+            query=command.raw_query,
+            answer_text=command.answer_text,
             resolved_topic=resolved_topic,
-            intent=turn.intent.value if turn.intent else None,
-            output_style=turn.requested_output_style.value if turn.requested_output_style else None,
-            tool_name=turn.tool_result.tool_name if turn.tool_result else None,
-            explicit_signals=self._collect_explicit_signals(state, resolved_topic),
+            intent=command.intent.value if command.intent else None,
+            output_style=command.requested_output_style.value if command.requested_output_style else None,
+            tool_name=command.tool_name,
+            explicit_signals=self._collect_explicit_signals(command, resolved_topic),
             current_session=self._to_memory_context(persistent),
             current_preferences=current_preferences,
             current_mastery=current_mastery,
-            quiz_score=self._extract_quiz_score(state),
-            current_time=runtime.request_ts,
+            quiz_score=command.quiz_score,
+            current_time=command.request_ts,
             extra={
-                "clarification_result": persistent.clarification_result,
-                "learning_mode": self._derive_learning_mode(state),
+                "clarification_result": dict(persistent.clarification_result),
+                "learning_mode": self._derive_learning_mode(command),
             },
         )
         promotion_result = self.promotion_policy.evaluate(promotion_input)
         write_plan = self.promotion_policy.build_write_plan(self._to_memory_context(persistent), promotion_result)
         updated_context = self._to_domain_context(write_plan.updated_context, persistent)
 
-        runtime_errors = list(runtime.errors)
+        runtime_context = self._session_runtime_context(command)
         try:
-            self.session_store.save(updated_context, runtime)
-        except Exception as exc:
-            runtime_errors.append(
-                build_error(
-                    WorkflowErrorCode.SESSION_PERSIST_FAILED,
-                    stage="persist_session",
-                    message=str(exc),
-                    retryable=True,
-                    degraded_to="in_memory_session_only",
-                )
-            )
-            state["runtime"] = runtime.model_copy(update={"errors": runtime_errors})
-            return state
+            self.session_store.save(updated_context, runtime_context)
+        except Exception as exc:  # pragma: no cover - delegated to workflow integration
+            raise MemoryCapabilityError(
+                code=WorkflowErrorCode.SESSION_PERSIST_FAILED,
+                stage="persist_session.session_store",
+                message=str(exc),
+                retryable=True,
+                degraded_to="session_not_persisted",
+            ) from exc
 
-        state["persistent"] = updated_context
-        self._persist_preference_patch(runtime.user_id, updated_context, write_plan.preference_patch, runtime_errors)
-        self._emit_persist_outbox(state, write_plan, runtime_errors)
+        diagnostics: Dict[str, Any] = {}
+        preference_diagnostics = self._persist_preference_patch(
+            command.user_id,
+            updated_context,
+            write_plan.preference_patch,
+        )
+        if preference_diagnostics:
+            diagnostics["preference_store"] = preference_diagnostics
 
-        runtime_extra = dict(runtime.extra)
-        runtime_extra["memory_updates"] = dict(write_plan.memory_updates)
-        runtime_extra["session_persisted"] = True
-        state["runtime"] = runtime.model_copy(update={"errors": runtime_errors, "extra": runtime_extra})
-        return state
+        semantic_summary = self._sync_semantic_facts(
+            user_id=command.user_id,
+            facts=write_plan.semantic_facts,
+            runtime=runtime_context,
+        )
+        if semantic_summary.get("failures"):
+            diagnostics["semantic_memory"] = {
+                "status": semantic_summary.get("status"),
+                "failures": list(semantic_summary.get("failures", [])),
+            }
 
-    def update_mastery(self, state: GraphState) -> GraphState:
-        runtime = state["runtime"]
-        topic = self._resolve_topic(state)
+        outbox_diagnostics = self._emit_persist_outbox(runtime_context, write_plan)
+        if outbox_diagnostics:
+            diagnostics["outbox"] = outbox_diagnostics
+
+        memory_updates = MemoryUpdateSummary(
+            current_topic=updated_context.current_topic,
+            updated_preferences=dict(write_plan.preference_patch),
+            weak_topics=list(write_plan.weak_topics),
+            semantic_memory=semantic_summary,
+            extra={
+                "recent_entities": list(updated_context.recent_entities),
+                "history_summary": updated_context.history_summary,
+                "promotion_reasons": list(promotion_result.reasons),
+                "diagnostics": diagnostics,
+            },
+        )
+        return PersistSessionResult(
+            updated_context=updated_context,
+            memory_updates=memory_updates,
+        )
+
+    def update_mastery(self, command: MasteryUpdateCommand) -> MasteryUpdateResult:
+        topic = self._resolve_topic(
+            command.resolved_topic,
+            command.persistent.current_topic,
+            command.raw_query,
+        )
         if not topic:
-            return state
+            return MasteryUpdateResult()
 
-        current = self._load_current_mastery(runtime.user_id, topic)
-        computation = self._build_mastery_computation(state, current)
-        runtime_errors = list(runtime.errors)
+        current = self._load_current_mastery(command.user_id, topic)
+        computation = self._build_mastery_computation(command, current)
 
         try:
             saved = self.mastery_store.upsert(
-                runtime.user_id,
+                command.user_id,
                 computation.topic,
-                self._mastery_payload(computation.updated_record, runtime.turn_id),
+                self._mastery_payload(computation.updated_record, command.turn_id),
             )
-        except Exception as exc:
-            runtime_errors.append(
-                build_error(
-                    WorkflowErrorCode.MASTERY_UPDATE_FAILED,
-                    stage="update_mastery",
-                    message=str(exc),
-                    retryable=True,
-                    degraded_to="skip_mastery_update",
-                )
-            )
-            state["runtime"] = runtime.model_copy(update={"errors": runtime_errors})
-            return state
+        except Exception as exc:  # pragma: no cover - delegated to workflow integration
+            raise MemoryCapabilityError(
+                code=WorkflowErrorCode.MASTERY_UPDATE_FAILED,
+                stage="update_mastery.mastery_store",
+                message=str(exc),
+                retryable=True,
+                degraded_to="skip_mastery_update",
+            ) from exc
 
-        self._sync_semantic_index(runtime.user_id, computation.semantic_index_updates, runtime, runtime_errors)
-
-        metrics = dict(runtime.metrics)
-        metrics.update(dict(computation.metrics_patch))
-        metrics["topic_mastery"] = saved
-        runtime_extra = dict(runtime.extra)
-        memory_updates = dict(runtime_extra.get("memory_updates", {}))
-        memory_updates["topic_mastery"] = saved
-        runtime_extra["memory_updates"] = memory_updates
-        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "errors": runtime_errors, "extra": runtime_extra})
-        return state
-
-    def recommend_next(self, state: GraphState) -> GraphState:
-        persistent = state["persistent"]
-        runtime = state["runtime"]
-        mastery_records = tuple(
-            self._to_mastery_record(item) for item in self.mastery_store.list_for_user(runtime.user_id)
+        semantic_index = self._sync_semantic_index(
+            user_id=command.user_id,
+            updates=computation.semantic_index_updates,
+            runtime=self._session_runtime_context_from_mastery(command),
         )
-        active_plan_topics = self._load_active_plan_topics(runtime.user_id, persistent)
+        metrics_patch = dict(computation.metrics_patch)
+        metrics_patch["topic_mastery"] = saved
+        return MasteryUpdateResult(
+            topic_mastery=saved,
+            semantic_index=semantic_index,
+            metrics_patch=metrics_patch,
+        )
+
+    def recommend_next(self, query: RecommendationQuery) -> Optional[RecommendationResult]:
+        mastery_records = tuple(
+            self._to_mastery_record(item) for item in self.mastery_store.list_for_user(query.user_id)
+        )
+        active_plan_topics = self._load_active_plan_topics(query.user_id, query.active_plan_id)
         derived_weak_topics = tuple(
             record.topic
             for record in mastery_records
             if record.review_priority >= 60.0 or record.mastery_score < 0.45
         )
         context = RecommendationContext(
-            current_topic=self._resolve_topic(state),
+            current_topic=query.current_topic,
             weak_topics=derived_weak_topics,
             mastery_records=mastery_records,
             active_plan_topics=active_plan_topics,
-            recent_topics=tuple(persistent.recent_entities),
+            recent_topics=tuple(query.recent_topics),
             preferred_output_style=(
-                persistent.user_preferences.get("preferred_output_style")
-                or persistent.user_preferences.get("answer_style")
+                query.user_preferences.get("preferred_output_style")
+                or query.user_preferences.get("answer_style")
             ),
-            learning_mode=bool(persistent.learning_mode),
+            learning_mode=bool(query.learning_mode),
             requested_limit=1,
         )
         recommendations = self.recommendation_service.recommend(context)
         if not recommendations:
-            return state
+            return None
 
-        snapshot = RecommendationSnapshot(
-            topic=recommendations[0].topic,
-            reason=recommendations[0].reason,
-            source=recommendations[0].source,
-            priority=recommendations[0].priority,
-            metadata=dict(recommendations[0].metadata),
+        top = recommendations[0]
+        return RecommendationResult(
+            topic=top.topic,
+            reason=top.reason,
+            source=top.source,
+            priority=top.priority,
+            metadata=dict(top.metadata),
         )
-        turn_extra = dict(state["turn"].extra)
-        turn_extra["recommendation"] = {
-            "topic": snapshot.topic,
-            "reason": snapshot.reason,
-            "source": snapshot.source,
-            "priority": snapshot.priority,
-            "metadata": dict(snapshot.metadata),
-        }
-        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
-        return state
 
     def load_any(self, session_id: str) -> DomainPersistentSessionContext:
-        load_any = getattr(self.session_store, "load_any", None)
-        if callable(load_any):
-            return load_any(session_id)
-        sessions = getattr(self.session_store, "sessions", None)
-        if isinstance(sessions, dict):
-            for (stored_session_id, _), value in sessions.items():
-                if stored_session_id == session_id:
-                    return value
+        if isinstance(self.session_store, SupportsLoadAny):
+            return self.session_store.load_any(session_id)
         return self.session_store.load(session_id, "anonymous")
 
-    def _resolve_topic(self, state: GraphState) -> str:
-        turn = state["turn"]
-        persistent = state["persistent"]
-        candidate = None
-        if turn.reference_resolution and turn.reference_resolution.resolved_entity:
-            candidate = turn.reference_resolution.resolved_entity
-        elif turn.retrieval_plan and turn.retrieval_plan.semantic_query:
-            candidate = turn.retrieval_plan.semantic_query
-        elif persistent.current_topic:
-            candidate = persistent.current_topic
-        else:
-            candidate = turn.raw_query
-        return self.topic_resolver.canonicalize(candidate)
-
-    def _derive_learning_mode(self, state: GraphState) -> bool:
-        persistent = state["persistent"]
-        turn = state["turn"]
-        if persistent.learning_mode:
-            return True
-        if turn.tool_result and turn.tool_result.tool_name in {"generateQuiz", "generateStudyPlan", "recommendNextTopic"}:
-            return True
-        return turn.intent is not None
-
-    def _collect_explicit_signals(self, state: GraphState, resolved_topic: str) -> ExplicitUserSignals:
-        turn = state["turn"]
-        runtime = state["runtime"]
-        query = turn.raw_query or ""
-        normalized_query = query.lower()
-        quiz_score = self._extract_quiz_score(state)
-        confusion = self._is_confused_query(normalized_query) or any(
-            error.code == WorkflowErrorCode.EVIDENCE_INSUFFICIENT for error in runtime.errors
+    def _session_runtime_context(self, command: PersistSessionCommand) -> SessionPersistenceContext:
+        return SessionPersistenceContext(
+            session_id=command.session_id,
+            turn_id=command.turn_id,
+            trace_id="%s:%s" % (command.session_id, command.turn_id),
+            user_id=command.user_id,
+            request_ts=command.request_ts,
         )
+
+    def _session_runtime_context_from_mastery(self, command: MasteryUpdateCommand) -> SessionPersistenceContext:
+        return SessionPersistenceContext(
+            session_id="unknown-session",
+            turn_id=command.turn_id,
+            trace_id="%s:%s" % (command.user_id, command.turn_id),
+            user_id=command.user_id,
+            request_ts=command.request_ts,
+        )
+
+    def _resolve_topic(
+        self,
+        resolved_topic: Optional[str],
+        current_topic: Optional[str],
+        raw_query: str,
+    ) -> str:
+        resolved = self._canonicalize_topic_candidate(resolved_topic)
+        if resolved:
+            return resolved
+
+        if current_topic:
+            return self.topic_resolver.canonicalize(current_topic)
+
+        return self._canonicalize_topic_candidate(raw_query)
+
+    def _canonicalize_topic_candidate(self, candidate: Optional[str]) -> str:
+        text = (candidate or "").strip()
+        if not text:
+            return ""
+
+        canonical = self.topic_resolver.canonicalize(text)
+        normalized = CanonicalTopicResolver._normalize(text)
+        if not normalized:
+            return ""
+
+        # When canonicalization only mirrors a long instructional sentence,
+        # keep the previous topic instead of polluting session memory with a query slug.
+        mirrored = normalized.replace(" ", ".")
+        query_markers = {
+            "compare",
+            "difference",
+            "differences",
+            "explain",
+            "how",
+            "what",
+            "why",
+            "vs",
+            "tell",
+            "show",
+            "describe",
+            "介绍",
+            "解释",
+            "对比",
+            "区别",
+            "怎么",
+            "如何",
+            "为什么",
+            "面试",
+            "总结",
+        }
+        tokens = normalized.split()
+        if canonical == mirrored and (len(tokens) > 4 or any(token in query_markers for token in tokens)):
+            return ""
+        return canonical
+
+    def _derive_learning_mode(self, command: PersistSessionCommand) -> bool:
+        if command.persistent.learning_mode:
+            return True
+        if command.tool_name in {"generateQuiz", "generateStudyPlan", "recommendNextTopic"}:
+            return True
+        return command.intent is not None
+
+    def _collect_explicit_signals(
+        self,
+        command: PersistSessionCommand,
+        resolved_topic: str,
+    ) -> ExplicitUserSignals:
+        query = command.raw_query or ""
+        normalized_query = query.lower()
+        quiz_score = command.quiz_score
+        confusion = self._is_confused_query(query, normalized_query) or (quiz_score is not None and quiz_score < 0.6)
         return ExplicitUserSignals(
-            preferred_output_style=turn.requested_output_style.value if turn.requested_output_style else None,
-            wants_code_examples=bool(turn.intent and turn.intent.value == "code"),
-            wants_interview_answer=bool(turn.requested_output_style and turn.requested_output_style.value == "interview"),
-            confirmed_plan=bool(turn.tool_result and turn.tool_result.tool_name == "generateStudyPlan"),
-            mastered=self._is_mastered_query(normalized_query),
-            confused=confusion or (quiz_score is not None and quiz_score < 0.6),
-            confirmed_output_style=self._is_confirmed_preference_query(normalized_query),
-            confirmed_code_examples=self._is_confirmed_behavior_query(normalized_query, "code"),
-            confirmed_interview_mode=self._is_confirmed_behavior_query(normalized_query, "interview"),
-            repeated_topic_signal=bool(resolved_topic and resolved_topic in state["persistent"].recent_entities),
+            preferred_output_style=command.requested_output_style.value if command.requested_output_style else None,
+            wants_code_examples=bool(command.intent and command.intent.value == "code"),
+            wants_interview_answer=bool(
+                command.requested_output_style and command.requested_output_style.value == "interview"
+            ),
+            confirmed_plan=bool(command.tool_name == "generateStudyPlan"),
+            mastered=self._is_mastered_query(query, normalized_query),
+            confused=confusion,
+            confirmed_output_style=self._is_confirmed_preference_query(query, normalized_query),
+            confirmed_code_examples=self._is_confirmed_behavior_query(query, normalized_query, "code"),
+            confirmed_interview_mode=self._is_confirmed_behavior_query(query, normalized_query, "interview"),
+            repeated_topic_signal=bool(resolved_topic and resolved_topic in command.persistent.recent_entities),
             low_quiz_score=quiz_score if quiz_score is not None and quiz_score < 0.6 else None,
             weak_topics=(),
         )
@@ -252,108 +348,176 @@ class MemoryService:
         user_id: str,
         updated_context: DomainPersistentSessionContext,
         preference_patch: Mapping[str, Any],
-        runtime_errors: list,
-    ) -> None:
+    ) -> Dict[str, Any]:
         if self.preference_store is None or not preference_patch:
-            return
+            return {}
         try:
-            self.preference_store.upsert(
-                UserPreferenceProfileRecord(
-                    user_id=user_id,
-                    answer_style=updated_context.user_preferences.get("preferred_output_style")
-                    or updated_context.user_preferences.get("answer_style"),
-                    explanation_depth=updated_context.user_preferences.get("preferred_output_style")
-                    or updated_context.user_preferences.get("answer_style"),
-                    prefer_code_examples=updated_context.user_preferences.get("prefers_code_examples"),
-                    extra={
-                        "answer_style_counter": dict(updated_context.user_preferences.get("answer_style_counter", {})),
-                        "behavior_counters": dict(updated_context.user_preferences.get("behavior_counters", {})),
-                        "prefers_interview_mode": bool(
-                            updated_context.user_preferences.get("prefers_interview_mode", False)
-                        ),
-                    },
-                )
+            profile = PreferenceProfileWrite(
+                user_id=user_id,
+                answer_style=updated_context.user_preferences.get("preferred_output_style")
+                or updated_context.user_preferences.get("answer_style"),
+                explanation_depth=updated_context.user_preferences.get("preferred_output_style")
+                or updated_context.user_preferences.get("answer_style"),
+                prefer_code_examples=bool(updated_context.user_preferences.get("prefers_code_examples")),
+                extra={
+                    "answer_style_counter": dict(updated_context.user_preferences.get("answer_style_counter", {})),
+                    "behavior_counters": dict(updated_context.user_preferences.get("behavior_counters", {})),
+                    "prefers_interview_mode": bool(
+                        updated_context.user_preferences.get("prefers_interview_mode", False)
+                    ),
+                },
             )
+            self.preference_store.upsert(profile)
+            return {"status": "updated", "fields": sorted(preference_patch.keys())}
         except Exception as exc:
-            runtime_errors.append(
-                build_error(
-                    WorkflowErrorCode.ASYNC_LOG_WRITE_FAILED,
-                    stage="persist_session.preference_store",
-                    message=str(exc),
-                    retryable=True,
-                    degraded_to="session_only",
+            return {
+                "status": "degraded",
+                "fields": sorted(preference_patch.keys()),
+                "error": str(exc),
+            }
+
+    def _sync_semantic_facts(
+        self,
+        *,
+        user_id: str,
+        facts: Sequence[Any],
+        runtime: SessionPersistenceContext,
+    ) -> Dict[str, Any]:
+        upserted: list[str] = []
+        failures: list[str] = []
+        for fact in facts:
+            try:
+                self.semantic_memory_store.upsert(user_id, fact)
+                upserted.append(fact.fact_id)
+            except Exception as exc:
+                failures.append("%s: %s" % (fact.fact_id, exc))
+                self._append_async_log(
+                    AsyncLogEvent(
+                        aggregate_type="memory",
+                        aggregate_id="%s:%s" % (runtime.session_id, runtime.turn_id),
+                        event_type="memory.semantic_fact_failed",
+                        dedupe_key="%s:%s:%s" % (runtime.session_id, runtime.turn_id, fact.fact_id),
+                        payload={
+                            "user_id": user_id,
+                            "fact_id": fact.fact_id,
+                            "topic": fact.topic,
+                            "reason": str(exc),
+                        },
+                        trace_id=runtime.trace_id,
+                    )
                 )
-            )
+        return {
+            "adapter": type(self.semantic_memory_store).__name__,
+            "status": "ok" if not failures else "degraded",
+            "upserted_fact_ids": upserted,
+            "failures": failures,
+        }
 
     def _emit_persist_outbox(
         self,
-        state: GraphState,
+        runtime: SessionPersistenceContext,
         write_plan: PersistSessionPlan,
-        runtime_errors: list,
-    ) -> None:
-        runtime = state["runtime"]
+    ) -> Dict[str, Any]:
+        failures: list[str] = []
+        events_written = 0
         for request in write_plan.durable_fact_requests:
+            try:
+                self._append_async_log(
+                    AsyncLogEvent(
+                        aggregate_type="memory",
+                        aggregate_id="%s:%s" % (runtime.session_id, runtime.turn_id),
+                        event_type="memory.%s" % request.fact_type,
+                        dedupe_key="%s:%s:%s" % (runtime.session_id, runtime.turn_id, request.fact_type),
+                        payload={
+                            "session_id": runtime.session_id,
+                            "turn_id": runtime.turn_id,
+                            "trace_id": runtime.trace_id,
+                            **dict(request.payload),
+                        },
+                        trace_id=runtime.trace_id,
+                    )
+                )
+                events_written += 1
+            except Exception as exc:
+                failures.append(str(exc))
+
+        for index, event in enumerate(write_plan.outbox_events):
+            event_type = str(event.get("event_type") or "memory.outbox")
+            try:
+                self._append_async_log(
+                    AsyncLogEvent(
+                        aggregate_type="memory",
+                        aggregate_id="%s:%s" % (runtime.session_id, runtime.turn_id),
+                        event_type=event_type,
+                        dedupe_key="%s:%s:%s:%s" % (runtime.session_id, runtime.turn_id, event_type, index),
+                        payload={
+                            "session_id": runtime.session_id,
+                            "turn_id": runtime.turn_id,
+                            "trace_id": runtime.trace_id,
+                            **dict(event),
+                        },
+                        trace_id=runtime.trace_id,
+                    )
+                )
+                events_written += 1
+            except Exception as exc:
+                failures.append(str(exc))
+
+        try:
             self._append_async_log(
-                {
-                    "event_type": "memory.%s" % request.fact_type,
-                    "session_id": runtime.session_id,
-                    "turn_id": runtime.turn_id,
-                    "trace_id": runtime.trace_id,
-                    "payload": dict(request.payload),
-                },
-                runtime_errors,
-                stage="persist_session.outbox",
+                AsyncLogEvent(
+                    aggregate_type="memory",
+                    aggregate_id="%s:%s" % (runtime.session_id, runtime.turn_id),
+                    event_type="memory.persist_session",
+                    dedupe_key="%s:%s:persist_session" % (runtime.session_id, runtime.turn_id),
+                    payload={
+                        "session_id": runtime.session_id,
+                        "turn_id": runtime.turn_id,
+                        "trace_id": runtime.trace_id,
+                        "current_topic": write_plan.updated_context.current_topic,
+                    },
+                    trace_id=runtime.trace_id,
+                )
             )
-        for event in write_plan.outbox_events:
-            payload = dict(event)
-            payload.setdefault("session_id", runtime.session_id)
-            payload.setdefault("turn_id", runtime.turn_id)
-            payload.setdefault("trace_id", runtime.trace_id)
-            self._append_async_log(payload, runtime_errors, stage="persist_session.outbox")
-        self._append_async_log(
-            {
-                "event_type": "persist_session",
-                "session_id": runtime.session_id,
-                "turn_id": runtime.turn_id,
-                "trace_id": runtime.trace_id,
-                "topic": write_plan.updated_context.current_topic,
-            },
-            runtime_errors,
-            stage="persist_session.outbox",
-        )
+            events_written += 1
+        except Exception as exc:
+            failures.append(str(exc))
+
+        if not failures:
+            return {"status": "queued", "events_written": events_written}
+        return {
+            "status": "degraded",
+            "events_written": events_written,
+            "failures": failures,
+        }
 
     def _build_mastery_computation(
         self,
-        state: GraphState,
+        command: MasteryUpdateCommand,
         current: TopicMasteryRecord,
     ) -> MasteryComputation:
-        runtime = state["runtime"]
-        turn = state["turn"]
-        evidence_count = len(turn.citations)
-        if turn.evidence_pack is not None:
-            evidence_count = max(evidence_count, len(turn.evidence_pack.items))
-        quiz_score = self._extract_quiz_score(state)
-        weak_topics = tuple(dict(runtime.extra.get("memory_updates", {})).get("weak_topics", []))
+        memory_extra = dict(command.memory_updates.extra)
+        evidence_count = int(memory_extra.get("evidence_count", 0) or 0)
+        weak_topics = tuple(command.memory_updates.weak_topics)
+        query = command.raw_query or ""
         signal = MasteryUpdateInput(
             topic=current.topic,
-            signal_type=self._mastery_signal_type(state),
-            quiz_score=quiz_score,
-            was_confused=self._is_confused_query((turn.raw_query or "").lower()),
-            weak_signal=current.topic in weak_topics or (quiz_score is not None and quiz_score < 0.6),
-            was_resolved=bool(turn.final_answer) and not any(
-                error.code == WorkflowErrorCode.EVIDENCE_INSUFFICIENT for error in runtime.errors
-            ),
-            explicit_mastered=self._is_mastered_query((turn.raw_query or "").lower()),
-            repeated_topic=current.topic in state["persistent"].recent_entities,
+            signal_type=self._mastery_signal_type(command),
+            quiz_score=command.quiz_score,
+            was_confused=bool(memory_extra.get("was_confused", self._is_confused_query(query, query.lower()))),
+            weak_signal=current.topic in weak_topics or (command.quiz_score is not None and command.quiz_score < 0.6),
+            was_resolved=bool(memory_extra.get("was_resolved", bool(command.answer_text))),
+            explicit_mastered=self._is_mastered_query(query, query.lower()),
+            repeated_topic=current.topic in command.persistent.recent_entities,
             evidence_delta=max(evidence_count, 1),
-            supporting_evidence_count=evidence_count,
-            timestamp=runtime.request_ts or datetime.now(timezone.utc),
+            supporting_evidence_count=max(evidence_count, 0),
+            timestamp=command.request_ts,
         )
         updated = self.mastery_updater.update(current, signal)
         signal_summary = {
             "topic": updated.topic,
             "signal_type": signal.signal_type,
-            "quiz_score": quiz_score,
+            "quiz_score": command.quiz_score,
             "weak_signal": signal.weak_signal,
             "evidence_count": evidence_count,
         }
@@ -372,96 +536,78 @@ class MemoryService:
             metrics_patch={"mastery_signal": signal_summary},
         )
 
-    def _mastery_signal_type(self, state: GraphState) -> str:
-        tool_result = state["turn"].tool_result
-        if tool_result and tool_result.tool_name == "generateQuiz":
+    def _mastery_signal_type(self, command: MasteryUpdateCommand) -> str:
+        if command.tool_name == "generateQuiz":
             return "quiz"
-        if state["turn"].reference_resolution and state["turn"].reference_resolution.resolved:
+        if command.memory_updates.extra.get("reference_resolved"):
             return "review"
         return "study"
 
     def _sync_semantic_index(
         self,
+        *,
         user_id: str,
         updates: Sequence[SemanticIndexUpdate],
-        runtime,
-        runtime_errors: list,
-    ) -> None:
+        runtime: SessionPersistenceContext,
+    ) -> Dict[str, Any]:
+        applied: list[Dict[str, Any]] = []
+        failures: list[str] = []
         for update in updates:
             try:
-                if self.semantic_memory_store is not None:
-                    self.semantic_memory_store.mark_indexed_state(user_id, update.topic, update.indexed)
-                else:
-                    self._append_async_log(
-                        {
-                            "event_type": "memory.semantic_index_update",
-                            "session_id": runtime.session_id,
-                            "turn_id": runtime.turn_id,
-                            "trace_id": runtime.trace_id,
-                            "payload": {
-                                "user_id": user_id,
-                                "topic": update.topic,
-                                "indexed": update.indexed,
-                                "reason": update.reason,
-                                "metadata": dict(update.metadata),
-                            },
-                        },
-                        runtime_errors,
-                        stage="update_mastery.semantic_index",
-                    )
+                self.semantic_memory_store.mark_indexed_state(user_id, update.topic, update.indexed)
+                applied.append(
+                    {
+                        "topic": update.topic,
+                        "indexed": update.indexed,
+                        "reason": update.reason,
+                        "metadata": dict(update.metadata),
+                    }
+                )
             except Exception as exc:
-                runtime_errors.append(
-                    build_error(
-                        WorkflowErrorCode.ASYNC_LOG_WRITE_FAILED,
-                        stage="update_mastery.semantic_index",
-                        message=str(exc),
-                        retryable=True,
-                        degraded_to="skip_semantic_index_update",
+                failures.append("%s: %s" % (update.topic, exc))
+                self._append_async_log(
+                    AsyncLogEvent(
+                        aggregate_type="memory",
+                        aggregate_id="%s:%s" % (runtime.session_id, runtime.turn_id),
+                        event_type="memory.semantic_index_failed",
+                        dedupe_key="%s:%s:semantic-index:%s" % (
+                            runtime.session_id,
+                            runtime.turn_id,
+                            update.topic,
+                        ),
+                        payload={
+                            "user_id": user_id,
+                            "topic": update.topic,
+                            "indexed": update.indexed,
+                            "reason": str(exc),
+                        },
+                        trace_id=runtime.trace_id,
                     )
                 )
+        return {
+            "adapter": type(self.semantic_memory_store).__name__,
+            "status": "ok" if not failures else "degraded",
+            "updates": applied,
+            "failures": failures,
+        }
 
-    def _append_async_log(self, entry: Mapping[str, Any], runtime_errors: list, stage: str) -> None:
-        try:
-            self.async_log_store.append(dict(entry))
-        except Exception as exc:
-            runtime_errors.append(
-                build_error(
-                    WorkflowErrorCode.ASYNC_LOG_WRITE_FAILED,
-                    stage=stage,
-                    message=str(exc),
-                    retryable=True,
-                    degraded_to="skip_async_log",
-                )
-            )
+    def _append_async_log(self, event: AsyncLogEvent) -> None:
+        self.async_log_store.append(event.as_mapping())
 
-    def _load_active_plan_topics(
-        self,
-        user_id: str,
-        persistent: DomainPersistentSessionContext,
-    ) -> Tuple[str, ...]:
-        plan_topics = tuple(persistent.extra.get("active_plan_topics", []))
-        if plan_topics:
-            return self.topic_resolver.canonicalize_many(plan_topics)
-        if self.learning_plan_store is None or not persistent.active_plan_id:
+    def _load_active_plan_topics(self, user_id: str, active_plan_id: Optional[str]) -> Tuple[str, ...]:
+        if self.learning_plan_store is None or not active_plan_id:
             return ()
-
-        list_for_plan = getattr(self.learning_plan_store, "list_for_plan", None)
-        if callable(list_for_plan):
-            try:
+        try:
+            if isinstance(self.learning_plan_store, SupportsListByPlan):
                 return self.topic_resolver.canonicalize_many(
-                    self._extract_plan_topics(list_for_plan(persistent.active_plan_id))
+                    self._extract_plan_topics(self.learning_plan_store.list_by_plan(user_id, active_plan_id))
                 )
-            except Exception:
-                return ()
-
-        list_by_plan = getattr(self.learning_plan_store, "list_by_plan", None)
-        if callable(list_by_plan):
-            try:
+            if isinstance(self.learning_plan_store, SupportsListForPlan):
                 return self.topic_resolver.canonicalize_many(
-                    self._extract_plan_topics(list_by_plan(user_id, persistent.active_plan_id))
+                    self._extract_plan_topics(self.learning_plan_store.list_for_plan(active_plan_id))
                 )
-            except Exception:
-                return ()
+        except Exception:
+            return ()
         return ()
 
     def _extract_plan_topics(self, items: Sequence[Any]) -> Tuple[str, ...]:
@@ -597,35 +743,25 @@ class MemoryService:
             "negative_signals": record.negative_signals,
         }
 
-    def _extract_quiz_score(self, state: GraphState) -> Optional[float]:
-        tool_result = state["turn"].tool_result
-        if not tool_result or tool_result.tool_name != "generateQuiz":
-            return None
-        data = tool_result.normalized_output.get("data", {})
-        score = data.get("score")
-        if isinstance(score, (int, float)):
-            return float(score)
-        return None
-
     @staticmethod
-    def _is_confirmed_preference_query(query: str) -> bool:
+    def _is_confirmed_preference_query(query: str, normalized_query: str) -> bool:
         phrases = ("以后都", "以后默认", "默认用", "一直用", "长期用", "always use", "default to")
-        return any(phrase in query for phrase in phrases)
+        return any(phrase in query or phrase in normalized_query for phrase in phrases)
 
     @staticmethod
-    def _is_confirmed_behavior_query(query: str, behavior: str) -> bool:
+    def _is_confirmed_behavior_query(query: str, normalized_query: str, behavior: str) -> bool:
         if behavior == "code":
             phrases = ("以后都给代码", "默认给代码", "always include code", "default to code")
         else:
             phrases = ("以后都按面试", "默认面试回答", "always answer for interview", "default interview")
-        return any(phrase in query for phrase in phrases)
+        return any(phrase in query or phrase in normalized_query for phrase in phrases)
 
     @staticmethod
-    def _is_mastered_query(query: str) -> bool:
+    def _is_mastered_query(query: str, normalized_query: str) -> bool:
         phrases = ("我懂了", "明白了", "已经掌握", "会了", "got it", "understood")
-        return any(phrase in query for phrase in phrases)
+        return any(phrase in query or phrase in normalized_query for phrase in phrases)
 
     @staticmethod
-    def _is_confused_query(query: str) -> bool:
+    def _is_confused_query(query: str, normalized_query: str) -> bool:
         phrases = ("不懂", "没懂", "还是不会", "记不住", "总答错", "混淆", "confused", "still unclear")
-        return any(phrase in query for phrase in phrases)
+        return any(phrase in query or phrase in normalized_query for phrase in phrases)

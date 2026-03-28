@@ -1,6 +1,9 @@
-﻿from .citation import CitationBuilder
+from .citation import CitationBuilder
+from .defaults import DEFAULT_KNOWLEDGE_CHUNKS
+from .domain_adapter import DomainRagAdapter
 from .evidence import EvidenceGovernanceConfig, EvidenceGovernanceService
 from .governance import KnowledgeGovernanceService
+from .heuristics import HeuristicModelGateway
 from .hybrid import HybridRetrieverConfig, HybridRetrieverService, InMemoryReranker, InMemoryTokenRetriever
 from .models import (
     ChunkType,
@@ -12,22 +15,40 @@ from .models import (
     HybridRecallResult,
     KnowledgeChunk,
     KnowledgeGovernanceDecision,
+    KnowledgeSearchMatch,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResult,
     RecallHit,
+    ReferenceResolution,
+    ReferenceResolutionRequest,
     RetrievalFilters,
     RetrievalPlan,
     SourceType,
 )
-from .protocols import DenseRetriever, HybridRetriever, KnowledgeGovernanceStore, KnowledgeRepository, MetadataRetriever, Reranker, SparseRetriever
+from .protocols import (
+    DenseRetriever,
+    HybridRetriever,
+    KnowledgeGovernanceStore,
+    KnowledgeRepository,
+    KnowledgeSearcher,
+    MetadataRetriever,
+    ReferenceResolver as ReferenceResolverProtocol,
+    Reranker,
+    SparseRetriever,
+)
+from .reference import ReferenceResolver
 from .rewrite import QueryRewriteContext, QueryRewriteService
-from .service import DEFAULT_KNOWLEDGE_CHUNKS, HeuristicModelGateway, HybridRAGOrchestrator
+from .search import KnowledgeSearchConfig, KnowledgeSearchFacade
+from .service import HybridRAGOrchestrator
 
 __all__ = [
     "ChunkType",
     "Citation",
     "CitationBuilder",
-    "DenseRetriever",
-    "DifficultyLevel",
     "DEFAULT_KNOWLEDGE_CHUNKS",
+    "DenseRetriever",
+    "DomainRagAdapter",
+    "DifficultyLevel",
     "EvidenceGovernanceConfig",
     "EvidenceGovernanceService",
     "EvidenceItem",
@@ -46,10 +67,20 @@ __all__ = [
     "KnowledgeGovernanceService",
     "KnowledgeGovernanceStore",
     "KnowledgeRepository",
+    "KnowledgeSearchConfig",
+    "KnowledgeSearchFacade",
+    "KnowledgeSearcher",
+    "KnowledgeSearchMatch",
+    "KnowledgeSearchRequest",
+    "KnowledgeSearchResult",
     "MetadataRetriever",
     "QueryRewriteContext",
     "QueryRewriteService",
     "RecallHit",
+    "ReferenceResolution",
+    "ReferenceResolutionRequest",
+    "ReferenceResolver",
+    "ReferenceResolverProtocol",
     "Reranker",
     "RetrievalFilters",
     "RetrievalPlan",

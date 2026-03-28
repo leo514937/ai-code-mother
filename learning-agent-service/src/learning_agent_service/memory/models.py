@@ -6,6 +6,48 @@ from typing import Any, Mapping, Optional, Tuple
 
 
 @dataclass(frozen=True)
+class SessionPersistenceContext:
+    session_id: str
+    turn_id: str
+    trace_id: str
+    user_id: str
+    request_ts: datetime
+
+
+@dataclass(frozen=True)
+class PreferenceProfileWrite:
+    user_id: str
+    answer_style: Optional[str] = None
+    explanation_depth: Optional[str] = None
+    prefer_code_examples: bool = False
+    extra: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AsyncLogEvent:
+    aggregate_type: str
+    aggregate_id: str
+    event_type: str
+    dedupe_key: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    trace_id: Optional[str] = None
+    available_at: Optional[datetime] = None
+
+    def as_mapping(self) -> Mapping[str, Any]:
+        payload = {
+            "aggregate_type": self.aggregate_type,
+            "aggregate_id": self.aggregate_id,
+            "event_type": self.event_type,
+            "dedupe_key": self.dedupe_key,
+            "payload": dict(self.payload),
+            "trace_id": self.trace_id,
+        }
+        if self.available_at is not None:
+            payload["available_at"] = self.available_at
+        return payload
+
+
+@dataclass(frozen=True)
 class UserPreferenceProfile:
     user_id: str
     preferred_output_style: Optional[str] = None
@@ -188,3 +230,30 @@ class QuizTarget:
     difficulty_hint: str
     priority: float
     metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+class MemoryCapabilityError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        code: str,
+        stage: str,
+        message: str,
+        retryable: bool = True,
+        degraded_to: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.message = message
+        self.retryable = retryable
+        self.degraded_to = degraded_to
+
+    def as_dict(self) -> Mapping[str, Any]:
+        return {
+            "code": self.code,
+            "stage": self.stage,
+            "message": self.message,
+            "retryable": self.retryable,
+            "degraded_to": self.degraded_to,
+        }

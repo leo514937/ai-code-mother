@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from learning_agent_service.config import Settings, get_settings
-from learning_agent_service.domain import ChatTurnCommand, GraphState, TurnUnderstandingResult
+from learning_agent_service.domain import ChatTurnCommand, KnowledgeSearchRequest, TurnUnderstandingRequest, TurnUnderstandingResult
 from learning_agent_service.domain.enums import IntentType, OutputStyle, TurnDecision
 from learning_agent_service.domain.protocols import (
     AnswerComposerPort,
@@ -23,14 +23,17 @@ from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 from learning_agent_service.infrastructure.db.qdrant import QdrantRuntime
 from learning_agent_service.infrastructure.repositories import (
     AdapterStatus,
-    ClarificationRecordRepository,
+    DurableLearningPlanStore,
+    DurablePreferenceStore,
     DurableTopicMasteryStore,
-    KnowledgeGovernanceRepository,
     LearningPlanRepository,
+    NoOpSemanticMemoryStore,
     OutboxAsyncLogStore,
     OutboxRepository,
     RedisSessionContextStore,
+    RuntimeComponentMode,
     RuntimeDependencyStatus,
+    RuntimeProfile,
     TopicMasteryRepository,
     UserPreferenceRepository,
 )
@@ -41,11 +44,8 @@ from learning_agent_service.infrastructure.repositories.in_memory import (
 )
 from learning_agent_service.memory.service import MemoryService
 from learning_agent_service.rag.models import KnowledgeChunk
-from learning_agent_service.rag.service import (
-    DEFAULT_KNOWLEDGE_CHUNKS,
-    HeuristicModelGateway,
-    HybridRAGOrchestrator,
-)
+from learning_agent_service.rag.heuristics import HeuristicModelGateway
+from learning_agent_service.rag.service import DEFAULT_KNOWLEDGE_CHUNKS, HybridRAGOrchestrator
 from learning_agent_service.tools.service import (
     AnswerComposer,
     Finalizer,
@@ -59,34 +59,111 @@ from learning_agent_service.tools.service import (
 class RepositoryBundle:
     outbox: Optional[OutboxRepository] = None
     preferences: Optional[UserPreferenceRepository] = None
-    clarifications: Optional[ClarificationRecordRepository] = None
     learning_plans: Optional[LearningPlanRepository] = None
-    knowledge_governance: Optional[KnowledgeGovernanceRepository] = None
     topic_mastery: Optional[TopicMasteryRepository] = None
 
 
-@dataclass
-class ServiceContainer:
-    settings: Settings
-    infrastructure_clients: InfrastructureClients
-    runtime_dependency_status: RuntimeDependencyStatus
-    repositories: RepositoryBundle
+@dataclass(frozen=True)
+class UnderstandingDeps:
+    model_gateway: ModelGatewayPort
+    status: AdapterStatus
+
+
+@dataclass(frozen=True)
+class RagDeps:
+    rag_orchestrator: RAGOrchestratorPort
+    status: AdapterStatus
+
+
+@dataclass(frozen=True)
+class MemoryDeps:
     session_context_store: SessionContextPort
     mastery_store: object
     async_log_store: object
-    model_gateway: ModelGatewayPort
-    rag_orchestrator: RAGOrchestratorPort
     memory_service: MemoryServicePort
-    tool_planner: ToolPlannerPort
-    tool_executor: ToolExecutorPort
-    tool_result_normalizer: ToolResultNormalizerPort
+    preference_store: object | None = None
+    learning_plan_store: object | None = None
+    semantic_memory_store: object | None = None
+    statuses: tuple[AdapterStatus, ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolDeps:
+    planner: ToolPlannerPort
+    executor: ToolExecutorPort
+    result_normalizer: ToolResultNormalizerPort
+
+
+@dataclass(frozen=True)
+class StreamingDeps:
     answer_composer: AnswerComposerPort
     finalizer: FinalizerPort
 
 
 @dataclass
+class ApplicationRuntime:
+    settings: Settings
+    infrastructure_clients: InfrastructureClients
+    repositories: RepositoryBundle
+    runtime_dependency_status: RuntimeDependencyStatus
+    runtime_profile: RuntimeProfile
+    understanding: UnderstandingDeps
+    rag: RagDeps
+    memory: MemoryDeps
+    tools: ToolDeps
+    streaming: StreamingDeps
+
+    @property
+    def session_context_store(self) -> SessionContextPort:
+        return self.memory.session_context_store
+
+    @property
+    def mastery_store(self) -> object:
+        return self.memory.mastery_store
+
+    @property
+    def async_log_store(self) -> object:
+        return self.memory.async_log_store
+
+    @property
+    def model_gateway(self) -> ModelGatewayPort:
+        return self.understanding.model_gateway
+
+    @property
+    def rag_orchestrator(self) -> RAGOrchestratorPort:
+        return self.rag.rag_orchestrator
+
+    @property
+    def memory_service(self) -> MemoryServicePort:
+        return self.memory.memory_service
+
+    @property
+    def tool_planner(self) -> ToolPlannerPort:
+        return self.tools.planner
+
+    @property
+    def tool_executor(self) -> ToolExecutorPort:
+        return self.tools.executor
+
+    @property
+    def tool_result_normalizer(self) -> ToolResultNormalizerPort:
+        return self.tools.result_normalizer
+
+    @property
+    def answer_composer(self) -> AnswerComposerPort:
+        return self.streaming.answer_composer
+
+    @property
+    def finalizer(self) -> FinalizerPort:
+        return self.streaming.finalizer
+
+@dataclass(frozen=True)
 class AppDependencies:
-    container: ServiceContainer
+    runtime: ApplicationRuntime
+
+    @property
+    def container(self) -> ApplicationRuntime:
+        return self.runtime
 
 
 @dataclass
@@ -94,13 +171,13 @@ class OpenAIBackedModelGateway:
     runtime: OpenAIRuntime
     fallback: ModelGatewayPort
 
-    def classify_turn(self, command: ChatTurnCommand, state: GraphState) -> TurnUnderstandingResult:
-        heuristic_result = self.fallback.classify_turn(command, state)
+    def classify_turn(self, request: TurnUnderstandingRequest) -> TurnUnderstandingResult:
+        heuristic_result = self.fallback.classify_turn(request)
         try:
-            model_result = self._classify_with_openai(command)
+            model_result = self._classify_with_openai(request.command)
         except Exception:
             return heuristic_result
-        return self._merge_with_fallback(command, heuristic_result, model_result)
+        return self._merge_with_fallback(request.command, heuristic_result, model_result)
 
     def _classify_with_openai(self, command: ChatTurnCommand) -> TurnUnderstandingResult:
         client = self.runtime.client
@@ -196,62 +273,113 @@ def build_dependencies(settings: Settings | None = None) -> AppDependencies:
         settings=resolved,
         allow_partial=resolved.allow_in_memory_fallback,
     )
-
     repositories = _build_repository_bundle(infra)
-    session_context_store, session_status = _build_session_context_store(resolved, infra)
-    mastery_store, mastery_status = _build_mastery_store(resolved, repositories)
-    async_log_store, async_log_status = _build_async_log_store(resolved, repositories)
-    model_gateway, model_gateway_status = _build_model_gateway(resolved, infra)
-    rag_orchestrator, rag_status = _build_rag_orchestrator(resolved, infra)
 
-    runtime_status = RuntimeDependencyStatus(
-        adapters=(
-            session_status,
-            mastery_status,
-            async_log_status,
-            model_gateway_status,
-            rag_status,
-            _adapter_status("postgres", infra.postgres is not None, "real"),
-            _adapter_status("redis", infra.redis is not None, "real"),
-            _adapter_status("qdrant", infra.qdrant is not None, "real"),
-            _adapter_status("openai", infra.openai is not None, "real"),
-        ),
+    understanding = _build_understanding_deps(resolved, infra)
+    rag = _build_rag_deps(resolved, infra)
+    memory = _build_memory_deps(resolved, infra, repositories)
+    tools = _build_tool_deps(rag.rag_orchestrator)
+    streaming = _build_streaming_deps(resolved)
+
+    adapter_statuses = (
+        understanding.status,
+        rag.status,
+        *memory.statuses,
+        _adapter_status("postgres", infra.postgres is not None, "real"),
+        _adapter_status("redis", infra.redis is not None, "real"),
+        _adapter_status("qdrant", infra.qdrant is not None, "real"),
+        _adapter_status("openai", infra.openai is not None, "real"),
+    )
+    runtime_dependency_status = RuntimeDependencyStatus(
+        adapters=tuple(adapter_statuses),
         bootstrap_errors=tuple(infra.bootstrap_errors),
     )
+    runtime_profile = _build_runtime_profile(resolved, runtime_dependency_status)
+
+    runtime = ApplicationRuntime(
+        settings=resolved,
+        infrastructure_clients=infra,
+        repositories=repositories,
+        runtime_dependency_status=runtime_dependency_status,
+        runtime_profile=runtime_profile,
+        understanding=understanding,
+        rag=rag,
+        memory=memory,
+        tools=tools,
+        streaming=streaming,
+    )
+    return AppDependencies(runtime=runtime)
+
+
+def _build_understanding_deps(
+    settings: Settings,
+    infra: InfrastructureClients,
+) -> UnderstandingDeps:
+    model_gateway, status = _build_model_gateway(settings, infra)
+    return UnderstandingDeps(model_gateway=model_gateway, status=status)
+
+
+def _build_rag_deps(
+    settings: Settings,
+    infra: InfrastructureClients,
+) -> RagDeps:
+    rag_orchestrator, status = _build_rag_orchestrator(settings, infra)
+    return RagDeps(rag_orchestrator=rag_orchestrator, status=status)
+
+
+def _build_memory_deps(
+    settings: Settings,
+    infra: InfrastructureClients,
+    repositories: RepositoryBundle,
+) -> MemoryDeps:
+    session_context_store, session_status = _build_session_context_store(settings, infra)
+    mastery_store, mastery_status = _build_mastery_store(settings, repositories)
+    async_log_store, async_log_status = _build_async_log_store(settings, repositories)
+    preference_store, preference_status = _build_preference_store(repositories)
+    learning_plan_store, learning_plan_status = _build_learning_plan_store(repositories)
+    semantic_memory_store, semantic_status = _build_semantic_memory_store(settings, infra)
 
     memory_service = MemoryService(
         session_store=session_context_store,
         mastery_store=mastery_store,
         async_log_store=async_log_store,
-        settings=resolved,
+        settings=settings,
+        preference_store=preference_store,
+        learning_plan_store=learning_plan_store,
+        semantic_memory_store=semantic_memory_store,
     )
-    tool_planner = ToolPlanner()
-    tool_executor = ToolExecutor(
-        search_knowledge_fn=rag_orchestrator.search_knowledge,
-        get_knowledge_detail_fn=rag_orchestrator.get_knowledge_detail,
-    )
-    tool_result_normalizer = ToolResultNormalizer()
-    answer_composer = AnswerComposer()
-    finalizer = Finalizer(settings=resolved)
-
-    container = ServiceContainer(
-        settings=resolved,
-        infrastructure_clients=infra,
-        runtime_dependency_status=runtime_status,
-        repositories=repositories,
+    return MemoryDeps(
         session_context_store=session_context_store,
         mastery_store=mastery_store,
         async_log_store=async_log_store,
-        model_gateway=model_gateway,
-        rag_orchestrator=rag_orchestrator,
         memory_service=memory_service,
-        tool_planner=tool_planner,
-        tool_executor=tool_executor,
-        tool_result_normalizer=tool_result_normalizer,
-        answer_composer=answer_composer,
-        finalizer=finalizer,
+        preference_store=preference_store,
+        learning_plan_store=learning_plan_store,
+        semantic_memory_store=semantic_memory_store,
+        statuses=(session_status, mastery_status, async_log_status, preference_status, learning_plan_status, semantic_status),
     )
-    return AppDependencies(container=container)
+
+
+def _build_tool_deps(rag_orchestrator: RAGOrchestratorPort) -> ToolDeps:
+    planner = ToolPlanner()
+    executor = ToolExecutor(
+        search_knowledge_fn=lambda topic, limit=5: rag_orchestrator.search_knowledge(
+            KnowledgeSearchRequest(topic=topic, limit=limit)
+        ).model_dump(mode="json"),
+        get_knowledge_detail_fn=rag_orchestrator.get_knowledge_detail,
+    )
+    return ToolDeps(
+        planner=planner,
+        executor=executor,
+        result_normalizer=ToolResultNormalizer(),
+    )
+
+
+def _build_streaming_deps(settings: Settings) -> StreamingDeps:
+    return StreamingDeps(
+        answer_composer=AnswerComposer(),
+        finalizer=Finalizer(settings=settings),
+    )
 
 
 def _build_model_gateway(
@@ -304,6 +432,7 @@ def _build_rag_orchestrator(
                     ready=True,
                     details={
                         "backend": "qdrant_snapshot",
+                        "runtime_mode": "snapshot",
                         "knowledge_collection": infra.qdrant.knowledge_collection,
                         "chunk_count": len(chunks),
                     },
@@ -321,6 +450,7 @@ def _build_rag_orchestrator(
             ready=True,
             details={
                 "backend": "in_memory_chunks",
+                "runtime_mode": "fallback",
                 "reason": "qdrant_unavailable_empty_or_disabled",
                 **({"fallback_from": "qdrant", "error": type(load_error).__name__} if load_error is not None else {}),
             },
@@ -336,9 +466,7 @@ def _build_repository_bundle(infra: InfrastructureClients) -> RepositoryBundle:
     return RepositoryBundle(
         outbox=OutboxRepository(session_factory),
         preferences=UserPreferenceRepository(session_factory),
-        clarifications=ClarificationRecordRepository(session_factory),
         learning_plans=LearningPlanRepository(session_factory),
-        knowledge_governance=KnowledgeGovernanceRepository(session_factory),
         topic_mastery=TopicMasteryRepository(session_factory),
     )
 
@@ -388,7 +516,9 @@ def _point_to_knowledge_chunk(point: Any) -> Optional[KnowledgeChunk]:
     if not isinstance(payload, Mapping):
         return None
 
-    chunk_id = payload.get("chunk_id") or getattr(point, "id", None) or (point.get("id") if isinstance(point, Mapping) else None)
+    chunk_id = payload.get("chunk_id") or getattr(point, "id", None) or (
+        point.get("id") if isinstance(point, Mapping) else None
+    )
     text = payload.get("text") or payload.get("content")
     document_id = payload.get("document_id") or payload.get("doc_id") or payload.get("source_id")
     if not chunk_id or not text or not document_id:
@@ -409,7 +539,8 @@ def _point_to_knowledge_chunk(point: Any) -> Optional[KnowledgeChunk]:
         metadata={
             key: value
             for key, value in payload.items()
-            if key not in {
+            if key
+            not in {
                 "chunk_id",
                 "document_id",
                 "doc_id",
@@ -440,7 +571,7 @@ def _build_session_context_store(
                 name="session_context_store",
                 mode="real",
                 ready=True,
-                details={"backend": "redis", "truth_boundary": "short_term_session"},
+                details={"backend": "redis", "truth_boundary": "short_term_session", "supports_load_any": True},
             ),
         )
     if not settings.allow_in_memory_fallback:
@@ -451,7 +582,7 @@ def _build_session_context_store(
             name="session_context_store",
             mode="fallback",
             ready=True,
-            details={"backend": "in_memory", "reason": "redis_unavailable_or_disabled"},
+            details={"backend": "in_memory", "reason": "redis_unavailable_or_disabled", "supports_load_any": True},
         ),
     )
 
@@ -488,7 +619,7 @@ def _build_async_log_store(settings: Settings, repositories: RepositoryBundle) -
                 name="async_log_store",
                 mode="real",
                 ready=True,
-                details={"backend": "postgres_outbox", "path": "outbox"},
+                details={"backend": "postgres_outbox", "path": "outbox", "payload_shape": "typed_or_legacy_mapping"},
             ),
         )
     if not settings.allow_in_memory_fallback:
@@ -501,6 +632,99 @@ def _build_async_log_store(settings: Settings, repositories: RepositoryBundle) -
             ready=True,
             details={"backend": "in_memory", "reason": "postgres_outbox_unavailable_or_disabled"},
         ),
+    )
+
+
+def _build_preference_store(
+    repositories: RepositoryBundle,
+) -> tuple[Optional[DurablePreferenceStore], AdapterStatus]:
+    repository = repositories.preferences
+    if repository is not None:
+        return (
+            DurablePreferenceStore(repository),
+            AdapterStatus(
+                name="preference_store",
+                mode="real",
+                ready=True,
+                details={"backend": "postgres", "wired": True},
+            ),
+        )
+    return (
+        None,
+        AdapterStatus(
+            name="preference_store",
+            mode="unavailable",
+            ready=False,
+            details={"backend": "none", "wired": False},
+        ),
+    )
+
+
+def _build_learning_plan_store(
+    repositories: RepositoryBundle,
+) -> tuple[Optional[DurableLearningPlanStore], AdapterStatus]:
+    repository = repositories.learning_plans
+    if repository is not None:
+        return (
+            DurableLearningPlanStore(repository),
+            AdapterStatus(
+                name="learning_plan_store",
+                mode="real",
+                ready=True,
+                details={"backend": "postgres", "wired": True},
+            ),
+        )
+    return (
+        None,
+        AdapterStatus(
+            name="learning_plan_store",
+            mode="unavailable",
+            ready=False,
+            details={"backend": "none", "wired": False},
+        ),
+    )
+
+
+def _build_semantic_memory_store(
+    settings: Settings,
+    infra: InfrastructureClients,
+) -> tuple[NoOpSemanticMemoryStore, AdapterStatus]:
+    requested_backend = "qdrant" if settings.prefer_real_adapters and infra.qdrant is not None else "none"
+    return (
+        NoOpSemanticMemoryStore(),
+        AdapterStatus(
+            name="semantic_memory_store",
+            mode="noop",
+            ready=True,
+            details={
+                "backend": "noop",
+                "requested_backend": requested_backend,
+                "reason": "explicit_noop_adapter_until_real_semantic_memory_backend_is_integrated",
+            },
+        ),
+    )
+
+
+def _build_runtime_profile(settings: Settings, runtime_status: RuntimeDependencyStatus) -> RuntimeProfile:
+    component_modes = tuple(
+        RuntimeComponentMode(
+            name=adapter.name,
+            mode=adapter.mode,
+            ready=adapter.ready,
+            details=dict(adapter.details),
+        )
+        for adapter in runtime_status.adapters
+    )
+    if not settings.prefer_real_adapters:
+        profile_name = "dev_fallback"
+    elif all(component.mode == "real" and component.ready for component in component_modes):
+        profile_name = "full"
+    else:
+        profile_name = "partial"
+    return RuntimeProfile(
+        name=profile_name,
+        components=component_modes,
+        bootstrap_errors=runtime_status.bootstrap_errors,
     )
 
 

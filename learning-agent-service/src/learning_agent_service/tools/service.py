@@ -4,103 +4,29 @@ import asyncio
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List
 
 from learning_agent_service.config import Settings
-from learning_agent_service.domain import GraphState, SseEnvelope, ToolExecutionResult, ToolSelection
-from learning_agent_service.domain.enums import OutputStyle, ToolExecutionStatus
-from learning_agent_service.tools.executor import ToolExecutor as BaseToolExecutor
-from learning_agent_service.tools.models import (
-    RegisteredTool,
-    SideEffectLevel,
-    ToolExecutionResult as BaseExecutionResult,
-    ToolSelection as BaseToolSelection,
-    ToolSpec,
+from learning_agent_service.domain import (
+    AnswerComposeRequest,
+    AnswerComposeResult,
+    NormalizedToolResult,
+    SseEnvelope,
+    ToolExecutionCommand,
+    ToolExecutionResult,
+    ToolNormalizationRequest,
+    ToolPlanningRequest,
+    ToolSelection,
 )
-from learning_agent_service.tools.normalizer import ToolResultNormalizer as BaseToolResultNormalizer
-from learning_agent_service.tools.planner import ToolPlanner as BaseToolPlanner
-from learning_agent_service.tools.registry import ToolRegistry
+from learning_agent_service.domain.enums import IntentType, OutputStyle, ToolExecutionStatus, TurnDecision
 
-
-class TopicPayload(BaseModel):
-    topic: str = Field(default="general-topic")
-    count: int = Field(default=5)
-    difficulty: str = Field(default="intermediate")
-    duration_days: int = Field(default=7)
-    goal: str = Field(default="systematic-review")
-
-
-class GenericToolOutput(BaseModel):
-    data: Dict[str, Any] = Field(default_factory=dict)
-
-
-def _generate_quiz(payload: TopicPayload) -> Dict[str, Any]:
-    questions = []
-    for idx in range(1, payload.count + 1):
-        questions.append(
-            {
-                "question": "Question {idx}: explain the core idea of {topic}.".format(
-                    idx=idx,
-                    topic=payload.topic,
-                ),
-                "answer": "Explain definition, mechanism, use cases, and follow-up questions.",
-                "difficulty": payload.difficulty,
-                "common_pitfall": "Only reciting the definition without tradeoffs.",
-            }
-        )
-    return {"data": {"topic": payload.topic, "questions": questions}}
-
-
-def _generate_study_plan(payload: TopicPayload) -> Dict[str, Any]:
-    items = []
-    for day in range(1, payload.duration_days + 1):
-        items.append(
-            {
-                "day": day,
-                "title": "Day {day}: {topic}".format(day=day, topic=payload.topic),
-                "objective": "Work toward {goal}.".format(goal=payload.goal),
-            }
-        )
-    return {"data": {"topic": payload.topic, "items": items}}
-
-
-def _recommend_next_topic(payload: TopicPayload) -> Dict[str, Any]:
-    return {
-        "data": {
-            "topic": payload.topic,
-            "next_topic": "next-{topic}".format(topic=payload.topic),
-            "reason": "topic-graph",
-        }
-    }
-
-
-def _save_learning_record(payload: TopicPayload) -> Dict[str, Any]:
-    return {"data": {"saved": True, "topic": payload.topic}}
-
-
-def _get_knowledge_detail(payload: TopicPayload) -> Dict[str, Any]:
-    return {
-        "data": {
-            "topic": payload.topic,
-            "detail": "detail is composed from rag evidence and durable facts",
-        }
-    }
-
-
-def _search_knowledge(payload: TopicPayload) -> Dict[str, Any]:
-    return {
-        "data": {
-            "topic": payload.topic,
-            "matches": [
-                {
-                    "chunk_id": "{topic}-match".format(topic=payload.topic.lower().replace(" ", "-")),
-                    "title": payload.topic,
-                }
-            ],
-        }
-    }
+from .builtin import build_builtin_tool_registry
+from .executor import ToolExecutor as BaseToolExecutor
+from .models import ToolExecutionResult as BaseExecutionResult
+from .models import ToolSelection as BaseToolSelection
+from .normalizer import ToolResultNormalizer as BaseToolResultNormalizer
+from .planner import ToolPlanner as BaseToolPlanner
+from .registry import ToolRegistry
 
 
 def build_default_tool_registry(
@@ -108,104 +34,10 @@ def build_default_tool_registry(
     search_knowledge_fn=None,
     get_knowledge_detail_fn=None,
 ) -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="generateQuiz",
-                description="generate quiz questions",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=True,
-                retryable=True,
-                side_effect_level=SideEffectLevel.NONE,
-                degrade_to="lightweight-quiz",
-            ),
-            handler=_generate_quiz,
-        )
+    return build_builtin_tool_registry(
+        search_knowledge_fn=search_knowledge_fn,
+        get_knowledge_detail_fn=get_knowledge_detail_fn,
     )
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="generateStudyPlan",
-                description="generate a study plan",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=True,
-                retryable=True,
-                side_effect_level=SideEffectLevel.NONE,
-                degrade_to="lightweight-study-plan",
-            ),
-            handler=_generate_study_plan,
-        )
-    )
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="recommendNextTopic",
-                description="recommend next topic",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=True,
-                retryable=True,
-                side_effect_level=SideEffectLevel.NONE,
-            ),
-            handler=_recommend_next_topic,
-        )
-    )
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="saveLearningRecord",
-                description="persist learning record",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=False,
-                retryable=True,
-                side_effect_level=SideEffectLevel.LOW,
-                degrade_to="async-retry-queue",
-            ),
-            handler=_save_learning_record,
-        )
-    )
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="getKnowledgeDetail",
-                description="return a knowledge detail",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=True,
-                retryable=False,
-                side_effect_level=SideEffectLevel.NONE,
-            ),
-            handler=(
-                (lambda payload: {"data": get_knowledge_detail_fn(payload.topic)})
-                if callable(get_knowledge_detail_fn)
-                else _get_knowledge_detail
-            ),
-        )
-    )
-    registry.register(
-        RegisteredTool(
-            spec=ToolSpec(
-                name="searchKnowledge",
-                description="search knowledge hits",
-                input_model=TopicPayload,
-                output_model=GenericToolOutput,
-                idempotent=True,
-                retryable=True,
-                side_effect_level=SideEffectLevel.NONE,
-                degrade_to="rewrite-and-retry",
-            ),
-            handler=(
-                (lambda payload: {"data": search_knowledge_fn(payload.topic, payload.count)})
-                if callable(search_knowledge_fn)
-                else _search_knowledge
-            ),
-        )
-    )
-    return registry
 
 
 def _run_async_safely(coroutine):
@@ -256,31 +88,17 @@ class ToolPlanner:
                 }
             )
 
-    def plan(self, state: GraphState) -> ToolSelection:
-        turn = state["turn"]
-        understanding = turn.understanding_result
-        intent_value = turn.intent.value if turn.intent is not None else None
-        if intent_value is None and understanding is not None:
-            raw_intent = understanding.intent
-            intent_value = raw_intent.value if hasattr(raw_intent, "value") else str(raw_intent)
-
-        decision_value = turn.decision.value
-        if understanding is not None and understanding.decision is not None:
-            raw_decision = understanding.decision
-            decision_value = raw_decision.value if hasattr(raw_decision, "value") else str(raw_decision)
-
-        need_tool = decision_value == "tool_then_answer"
-        slots = dict(turn.slots)
-        if not slots and understanding is not None:
-            slots = dict(understanding.slots)
-        slots.setdefault("topic", state["persistent"].current_topic or state["turn"].raw_query)
+    def plan(self, request: ToolPlanningRequest) -> ToolSelection:
+        need_tool = request.decision == TurnDecision.TOOL_THEN_ANSWER or request.decision == "tool_then_answer"
+        slots = dict(request.slots)
+        slots.setdefault("topic", request.current_topic or request.raw_query)
         slots.setdefault("tool_input", {"topic": slots.get("topic")})
         mapped_intent = {
-            "quiz": "quiz",
-            "study_plan": "study_plan",
-            "recommend": "recommend",
-            "follow_up": "detail",
-        }.get(intent_value or "", intent_value)
+            IntentType.QUIZ.value: "quiz",
+            IntentType.STUDY_PLAN.value: "study_plan",
+            IntentType.RECOMMEND.value: "recommend",
+            IntentType.FOLLOW_UP.value: "detail",
+        }.get(request.intent.value if request.intent is not None else "", request.intent.value if request.intent else None)
         selection = self.planner.plan(mapped_intent, need_tool, slots)
         if selection is None:
             return ToolSelection(should_execute=False)
@@ -322,7 +140,8 @@ class ToolExecutor:
         if self.executor is None:
             self.executor = BaseToolExecutor(self.registry)
 
-    def execute(self, selection: ToolSelection, state: GraphState) -> ToolExecutionResult:
+    def execute(self, command: ToolExecutionCommand) -> ToolExecutionResult:
+        selection = command.selection
         if not selection.tool_name or not selection.should_execute:
             return ToolExecutionResult(status=ToolExecutionStatus.SKIPPED)
 
@@ -359,9 +178,8 @@ class ToolResultNormalizer:
         if self.normalizer is None:
             self.normalizer = BaseToolResultNormalizer()
 
-    def normalize(self, result: ToolExecutionResult, state: GraphState):
-        from learning_agent_service.domain import NormalizedToolResult
-
+    def normalize(self, request: ToolNormalizationRequest) -> NormalizedToolResult:
+        result = request.result
         extra = dict(result.extra)
         payload = BaseExecutionResult(
             tool_name=result.tool_name or "",
@@ -393,38 +211,34 @@ class ToolResultNormalizer:
 
 @dataclass
 class AnswerComposer:
-    def compose(self, state: GraphState) -> GraphState:
-        turn = state["turn"]
-        rag_result = turn.rag_result
-        tool_result = turn.tool_result
+    def compose(self, request: AnswerComposeRequest) -> AnswerComposeResult:
         sections: List[str] = []
-        if turn.requested_output_style == OutputStyle.INTERVIEW:
+        if request.requested_output_style == OutputStyle.INTERVIEW:
             sections.append("Interview-ready answer")
-        elif turn.requested_output_style == OutputStyle.COMPARISON:
+        elif request.requested_output_style == OutputStyle.COMPARISON:
             sections.append("Comparison answer")
         else:
             sections.append("Direct answer")
+        rag_result = request.rag_result
         if rag_result and rag_result.evidence_pack and rag_result.evidence_pack.items:
             sections.extend([item.content for item in rag_result.evidence_pack.items[:2]])
-        if tool_result and tool_result.normalized_output:
+        if request.tool_result and request.tool_result.normalized_output:
             sections.append(
                 "Tool result: {payload}".format(
-                    payload=tool_result.normalized_output.get("data", tool_result.normalized_output)
+                    payload=request.tool_result.normalized_output.get("data", request.tool_result.normalized_output)
                 )
             )
+        if request.recommendation is not None:
+            sections.append("Recommended next topic: {topic}".format(topic=request.recommendation.topic))
         if not sections:
             sections.append("No stable evidence available, fallback to a conservative summary.")
-        runtime = state["runtime"]
-        metrics = dict(runtime.metrics)
-        metrics["final_answer_confidence"] = 0.82 if rag_result and rag_result.evidence_pack else 0.56
-        state["runtime"] = runtime.model_copy(update={"metrics": metrics})
-        state["turn"] = turn.model_copy(update={"final_answer": "\n\n".join(sections)})
-        return state
+        confidence = 0.82 if rag_result and rag_result.evidence_pack else 0.56
+        return AnswerComposeResult(answer_text="\n\n".join(sections), confidence=confidence)
 
 
 @dataclass
 class Finalizer:
     settings: Settings
 
-    def finalize(self, state: GraphState) -> Optional[SseEnvelope]:
+    def finalize(self, *args, **kwargs) -> SseEnvelope | None:
         return None

@@ -159,6 +159,163 @@ class TurnUnderstandingResult(CoreModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TurnUnderstandingRequest(CoreModel):
+    command: ChatTurnCommand
+    persistent: "PersistentSessionContext"
+
+
+class ReferenceResolutionRequest(CoreModel):
+    raw_query: str
+    current_topic: Optional[str] = None
+    recent_entities: List[str] = Field(default_factory=list)
+    clarification_result: Dict[str, Any] = Field(default_factory=dict)
+    pending_clarification: Optional[ClarificationCard] = None
+    history_summary: Optional[str] = None
+    topic_hint: Optional[str] = None
+
+
+class QueryRewriteRequest(CoreModel):
+    raw_query: str
+    intent: Optional[IntentType] = None
+    requested_output_style: Optional[OutputStyle] = None
+    reference_resolution: Optional[ReferenceResolutionResult] = None
+    current_topic: Optional[str] = None
+    topic_hint: Optional[str] = None
+    user_preferences: Dict[str, Any] = Field(default_factory=dict)
+    base_filters: Dict[str, Any] = Field(default_factory=dict)
+
+
+class HybridRetrieveRequest(CoreModel):
+    plan: RetrievalPlan
+
+
+class EvidenceEvaluationRequest(CoreModel):
+    plan: RetrievalPlan
+    hybrid_recall: HybridRecallResult
+    intent: Optional[IntentType] = None
+    requested_output_style: Optional[OutputStyle] = None
+
+
+class CitationBuildRequest(CoreModel):
+    evidence_pack: EvidencePack
+
+
+class KnowledgeSearchRequest(CoreModel):
+    topic: str
+    limit: int = 5
+    category: Optional[str] = None
+    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeSearchResult(CoreModel):
+    matches: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_pack: Optional[EvidencePack] = None
+    citations: List[Citation] = Field(default_factory=list)
+    retrieval_strategy: Optional[str] = None
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolPlanningRequest(CoreModel):
+    raw_query: str
+    decision: TurnDecision
+    intent: Optional[IntentType] = None
+    slots: Dict[str, Any] = Field(default_factory=dict)
+    current_topic: Optional[str] = None
+
+
+class ToolExecutionCommand(CoreModel):
+    selection: ToolSelection
+
+
+class ToolNormalizationRequest(CoreModel):
+    result: ToolExecutionResult
+
+
+class PersistSessionCommand(CoreModel):
+    trace_id: str = ""
+    session_id: str
+    turn_id: str
+    user_id: str
+    workflow_version: str = "learn-agent/v1"
+    raw_query: str
+    answer_text: str
+    resolved_topic: Optional[str] = None
+    intent: Optional[IntentType] = None
+    requested_output_style: Optional[OutputStyle] = None
+    tool_name: Optional[str] = None
+    quiz_score: Optional[float] = None
+    request_ts: datetime
+    persistent: "PersistentSessionContext"
+    final_confidence: float = 0.0
+
+
+class MemoryUpdateSummary(CoreModel):
+    current_topic: Optional[str] = None
+    updated_preferences: Dict[str, Any] = Field(default_factory=dict)
+    weak_topics: List[str] = Field(default_factory=list)
+    topic_mastery: Dict[str, Any] = Field(default_factory=dict)
+    semantic_memory: Dict[str, Any] = Field(default_factory=dict)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PersistSessionResult(CoreModel):
+    updated_context: "PersistentSessionContext"
+    memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
+
+
+class MasteryUpdateCommand(CoreModel):
+    trace_id: str = ""
+    session_id: str
+    user_id: str
+    turn_id: str
+    raw_query: str
+    answer_text: str
+    resolved_topic: Optional[str] = None
+    intent: Optional[IntentType] = None
+    requested_output_style: Optional[OutputStyle] = None
+    tool_name: Optional[str] = None
+    quiz_score: Optional[float] = None
+    request_ts: datetime
+    persistent: "PersistentSessionContext"
+    memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
+
+
+class MasteryUpdateResult(CoreModel):
+    topic_mastery: Dict[str, Any] = Field(default_factory=dict)
+    semantic_index: Dict[str, Any] = Field(default_factory=dict)
+    metrics_patch: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RecommendationResult(CoreModel):
+    topic: str
+    reason: str
+    source: str
+    priority: float
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RecommendationQuery(CoreModel):
+    user_id: str
+    current_topic: Optional[str] = None
+    recent_topics: List[str] = Field(default_factory=list)
+    user_preferences: Dict[str, Any] = Field(default_factory=dict)
+    active_plan_id: Optional[str] = None
+    learning_mode: bool = False
+
+
+class AnswerComposeRequest(CoreModel):
+    raw_query: str
+    requested_output_style: Optional[OutputStyle] = None
+    rag_result: Optional[RagResult] = None
+    tool_result: Optional[NormalizedToolResult] = None
+    recommendation: Optional[RecommendationResult] = None
+
+
+class AnswerComposeResult(CoreModel):
+    answer_text: str
+    confidence: float = 0.0
+
+
 class PersistentSessionContext(CoreModel):
     current_topic: Optional[str] = None
     recent_entities: List[str] = Field(default_factory=list)
@@ -190,8 +347,8 @@ class TurnRuntimeState(CoreModel):
     raw_tool_result: Optional[ToolExecutionResult] = None
     tool_result: Optional[NormalizedToolResult] = None
     final_answer: Optional[str] = None
-    understanding_result: Optional[TurnUnderstandingResult] = None
     rag_result: Optional[RagResult] = None
+    recommendation: Optional[RecommendationResult] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -211,6 +368,8 @@ class GraphRuntimeMeta(CoreModel):
     degrade_to: Optional[str] = None
     terminal_event: Optional[TerminalEvent] = None
     emitted_events: List[SseEnvelope] = Field(default_factory=list)
+    memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
+    session_persisted: bool = False
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -248,3 +407,5 @@ class SseEnvelope(CoreModel):
 
 
 GraphRuntimeMeta.model_rebuild()
+TurnUnderstandingRequest.model_rebuild()
+PersistSessionResult.model_rebuild()

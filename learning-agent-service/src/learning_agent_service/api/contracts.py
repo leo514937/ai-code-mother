@@ -1,10 +1,17 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+
+from learning_agent_service.domain.contracts import (
+    Citation,
+    ClarificationCard,
+    ErrorPayload,
+    FinalPayload,
+)
 
 
 class ApiResponse(BaseModel):
@@ -23,33 +30,18 @@ class ApiResponse(BaseModel):
 
 class EventType(str, Enum):
     ACK = "ack"
-    STATE_UPDATE = "state_update"
     CLARIFICATION_CARD = "clarification_card"
     RETRIEVAL_STARTED = "retrieval_started"
     RETRIEVAL_RESULT = "retrieval_result"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
-    DELTA = "delta"
     FINAL = "final"
     ERROR = "error"
-
-
-class Citation(BaseModel):
-    chunk_id: str
-    document_id: Optional[str] = None
-    source_type: Optional[str] = None
-    version: Optional[str] = None
-    score: Optional[float] = None
 
 
 class AckPayload(BaseModel):
     message: str
     accepted_at: datetime
-
-
-class StateUpdatePayload(BaseModel):
-    stage: str
-    status: str
 
 
 class ClarificationOptionPayload(BaseModel):
@@ -64,6 +56,10 @@ class ClarificationCardPayload(BaseModel):
     question: str
     options: List[ClarificationOptionPayload] = Field(default_factory=list)
     ambiguity_type: Optional[str] = None
+
+    @classmethod
+    def from_domain(cls, card: ClarificationCard) -> "ClarificationCardPayload":
+        return cls.model_validate(card.model_dump(mode="json"))
 
 
 class RetrievalStartedPayload(BaseModel):
@@ -94,33 +90,6 @@ class ToolResultPayload(BaseModel):
     error_message: Optional[str] = None
     degraded_to: Optional[str] = None
     output: Dict[str, Any] = Field(default_factory=dict)
-
-
-class DeltaPayload(BaseModel):
-    chunk: str
-
-
-class FinalPayload(BaseModel):
-    answer_text: str = Field(min_length=1)
-    citations: List[Citation] = Field(default_factory=list)
-    used_tools: List[str] = Field(default_factory=list)
-    resolved_topic: Optional[str] = None
-    retrieval_strategy: Optional[str] = None
-    memory_updates: Dict[str, Any] = Field(default_factory=dict)
-    recommendation: Optional[Dict[str, Any]] = None
-    confidence: float = Field(ge=0.0, le=1.0)
-    intent: Optional[str] = None
-    requested_output_style: Optional[str] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ErrorPayload(BaseModel):
-    code: str
-    message: str
-    retryable: bool
-    stage: Optional[str] = None
-    degraded_to: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatStreamRequest(BaseModel):
@@ -187,26 +156,22 @@ class SessionStateResponse(BaseModel):
 
 
 class SseEnvelope(BaseModel):
-    model_config = ConfigDict(use_enum_values=True)
-
-    event_type: EventType
-    trace_id: str = Field(min_length=1)
-    session_id: str = Field(min_length=1)
-    turn_id: str = Field(min_length=1)
+    event_type: str
+    trace_id: str
+    session_id: str
+    turn_id: str
     timestamp: datetime
-    workflow_version: str = Field(min_length=1)
+    workflow_version: str
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
 EVENT_PAYLOAD_MODELS: Dict[EventType, Type[BaseModel]] = {
     EventType.ACK: AckPayload,
-    EventType.STATE_UPDATE: StateUpdatePayload,
     EventType.CLARIFICATION_CARD: ClarificationCardPayload,
     EventType.RETRIEVAL_STARTED: RetrievalStartedPayload,
     EventType.RETRIEVAL_RESULT: RetrievalResultPayload,
     EventType.TOOL_CALL: ToolCallPayload,
     EventType.TOOL_RESULT: ToolResultPayload,
-    EventType.DELTA: DeltaPayload,
     EventType.FINAL: FinalPayload,
     EventType.ERROR: ErrorPayload,
 }

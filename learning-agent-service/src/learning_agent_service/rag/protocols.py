@@ -2,7 +2,17 @@
 
 from typing import Iterable, Protocol, Sequence
 
-from .models import HybridRecallResult, KnowledgeChunk, KnowledgeGovernanceDecision, RecallHit, RetrievalPlan
+from .models import (
+    HybridRecallResult,
+    KnowledgeChunk,
+    KnowledgeGovernanceDecision,
+    KnowledgeSearchRequest,
+    KnowledgeSearchResult,
+    RecallHit,
+    ReferenceResolution,
+    ReferenceResolutionRequest,
+    RetrievalPlan,
+)
 
 
 class DenseRetriever(Protocol):
@@ -27,6 +37,16 @@ class Reranker(Protocol):
 
 class HybridRetriever(Protocol):
     def retrieve(self, plan: RetrievalPlan) -> HybridRecallResult:
+        ...
+
+
+class ReferenceResolver(Protocol):
+    def resolve(self, request: ReferenceResolutionRequest) -> ReferenceResolution:
+        ...
+
+
+class KnowledgeSearcher(Protocol):
+    def search(self, request: KnowledgeSearchRequest) -> KnowledgeSearchResult:
         ...
 
 
