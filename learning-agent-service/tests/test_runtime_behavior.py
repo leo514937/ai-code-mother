@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import importlib
 import unittest
+from contextlib import contextmanager
 from datetime import datetime
+from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
+import app as app_module
+from learning_agent_service.api import internal_auth
 from learning_agent_service.api.compat import HTTPException
 from learning_agent_service.api.contracts import (
     ChatStreamRequest,
     EventType,
     QuizGenerateRequest,
+    SessionStateResponse,
     SseEnvelope,
+    StudyPlanGenerateRequest,
+    StudyPlanGenerateResponse,
 )
 from learning_agent_service.api.router import create_api_router
 
@@ -222,7 +230,59 @@ class _TerminalErrorStreamService:
         raise AssertionError("unreachable")
 
 
+class _ProtectedRoutesService:
+    def run_stream(self, request: ChatStreamRequest):
+        now = datetime(2026, 3, 28, 9, 0, 0)
+        return [
+            SseEnvelope(
+                event_type=EventType.ACK,
+                trace_id=request.trace_id,
+                session_id=request.session_id,
+                turn_id=request.turn_id or "turn-1",
+                timestamp=now,
+                workflow_version="learn-agent/v1",
+                payload={"message": "accepted", "accepted_at": now},
+            ),
+        ]
+
+    def generate_quiz(self, request: QuizGenerateRequest):
+        return {"topic": request.topic, "questions": []}
+
+    def generate_study_plan(self, request: StudyPlanGenerateRequest):
+        return StudyPlanGenerateResponse(topic=request.topic, items=[])
+
+    def get_session_state(self, session_id: str):
+        return SessionStateResponse(session_id=session_id, current_topic="Spring")
+
+
+@contextmanager
+def _configured_internal_token(token: str = "service-secret"):
+    with patch.dict(os.environ, {"LEARNING_AGENT_INTERNAL_API_TOKEN": token}, clear=False):
+        internal_auth.get_settings.cache_clear()
+        try:
+            yield token
+        finally:
+            internal_auth.get_settings.cache_clear()
+
+
+async def _collect_body_chunks(response) -> list[str]:
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+    return chunks
+
+
 class RuntimeBehaviorTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._token_patch = patch.dict(os.environ, {"LEARNING_AGENT_INTERNAL_API_TOKEN": ""}, clear=False)
+        self._token_patch.start()
+        internal_auth.get_settings.cache_clear()
+        self.addCleanup(self._cleanup_internal_token_patch)
+
+    def _cleanup_internal_token_patch(self) -> None:
+        self._token_patch.stop()
+        internal_auth.get_settings.cache_clear()
+
     def _load_runtime_stack(self):
         try:
             dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
@@ -373,7 +433,7 @@ class RuntimeBehaviorTestCase(unittest.TestCase):
                 )
             )
         )
-        chunks = list(response.body_iterator)
+        chunks = asyncio.run(_collect_body_chunks(response))
         self.assertEqual(len(chunks), 6)
         self.assertIn("event: ack", chunks[0])
         self.assertIn("event: retrieval_started", chunks[1])
@@ -396,7 +456,7 @@ class RuntimeBehaviorTestCase(unittest.TestCase):
                 )
             )
         )
-        chunks = list(response.body_iterator)
+        chunks = asyncio.run(_collect_body_chunks(response))
         self.assertEqual(len(chunks), 2)
         self.assertIn("event: ack", chunks[0])
         self.assertIn("event: clarification_card", chunks[1])
@@ -415,7 +475,7 @@ class RuntimeBehaviorTestCase(unittest.TestCase):
                 )
             )
         )
-        chunks = list(response.body_iterator)
+        chunks = asyncio.run(_collect_body_chunks(response))
         self.assertEqual(len(chunks), 2)
         self.assertIn("event: ack", chunks[0])
         self.assertIn("event: error", chunks[1])
@@ -437,3 +497,75 @@ class RuntimeBehaviorTestCase(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 503)
         self.assertEqual(context.exception.detail["code"], "LEARN-5301")
         self.assertEqual(context.exception.detail["degraded_to"], "lightweight-quiz")
+
+    def test_business_routes_require_internal_token_when_configured(self) -> None:
+        router = create_api_router(_ProtectedRoutesService())
+        cases = [
+            (
+                "/internal/v1/chat/stream",
+                (
+                    ChatStreamRequest(
+                        user_id="u1",
+                        session_id="s1",
+                        trace_id="t1",
+                        turn_id="turn-1",
+                        message="Explain Spring AOP",
+                    ),
+                ),
+            ),
+            (
+                "/internal/v1/quiz/generate",
+                (
+                    QuizGenerateRequest(
+                        user_id="u1",
+                        session_id="s1",
+                        topic="JVM",
+                        count=5,
+                    ),
+                ),
+            ),
+            (
+                "/internal/v1/study-plan/generate",
+                (
+                    StudyPlanGenerateRequest(
+                        user_id="u1",
+                        session_id="s1",
+                        topic="Spring",
+                        duration_days=7,
+                    ),
+                ),
+            ),
+            (
+                "/internal/v1/session/{session_id}/state",
+                ("session-1",),
+            ),
+        ]
+
+        with _configured_internal_token() as token:
+            for path, args in cases:
+                route = next(route for route in router.routes if route.path == path)
+
+                with self.assertRaises(HTTPException) as missing_context:
+                    asyncio.run(route.endpoint(*args))
+                self.assertEqual(missing_context.exception.status_code, 401)
+                self.assertEqual(missing_context.exception.detail["code"], "LEARN-1401")
+
+                with self.assertRaises(HTTPException) as wrong_context:
+                    asyncio.run(route.endpoint(*args, x_internal_token="wrong-token"))
+                self.assertEqual(wrong_context.exception.status_code, 401)
+                self.assertEqual(wrong_context.exception.detail["code"], "LEARN-1401")
+
+                response = asyncio.run(route.endpoint(*args, x_internal_token=token))
+                self.assertIsNotNone(response)
+
+    def test_health_and_meta_routes_do_not_require_internal_token(self) -> None:
+        with _configured_internal_token():
+            app = app_module.create_app(_ProtectedRoutesService())
+            health_route = next(route for route in app.routes if route.path == "/health")
+            meta_route = next(route for route in app.routes if route.path == "/meta")
+
+            health_payload = asyncio.run(health_route.endpoint())
+            meta_payload = asyncio.run(meta_route.endpoint())
+
+            self.assertEqual(health_payload["status"], "ok")
+            self.assertEqual(meta_payload["service"], "learning-agent-service")

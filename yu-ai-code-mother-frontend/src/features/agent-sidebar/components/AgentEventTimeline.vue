@@ -1,11 +1,11 @@
 <template>
   <section class="event-timeline">
     <div class="timeline-header">
-      <span>Agent Events</span>
-      <a-tag :color="busy ? 'processing' : 'default'">{{ busy ? 'Streaming' : 'Idle' }}</a-tag>
+      <span>运行日志</span>
+      <a-tag :color="busy ? 'processing' : 'default'">{{ busy ? '运行中' : '空闲' }}</a-tag>
     </div>
     <div class="timeline-body">
-      <div v-if="!items.length" class="timeline-empty">Streaming events will appear here.</div>
+      <div v-if="!items.length" class="timeline-empty">流式事件会在此处显示。</div>
       <div v-for="item in items" :key="item.id" class="timeline-item">
         <div class="item-top">
           <a-tag :color="toneColorMap[item.tone]">{{ item.label }}</a-tag>

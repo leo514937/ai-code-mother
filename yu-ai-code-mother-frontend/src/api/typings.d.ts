@@ -138,7 +138,7 @@ declare namespace API {
     message: string
   }
 
-  type DeleteRequest = {
+  type API_DeleteRequest = {
     id?: number
   }
 

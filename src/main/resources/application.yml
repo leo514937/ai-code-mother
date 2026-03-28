@@ -104,9 +104,9 @@ management:
       show-details: always
 agent:
   sidebar:
-    enabled: false
+    enabled: true
   python:
-    base-url: http://127.0.0.1:8000
-    internal-token: 'replace-with-internal-token'
+    base-url: http://127.0.0.1:9000
+    internal-token: 'local-learning-agent-token'
     connect-timeout-ms: 3000
     read-timeout-ms: 60000

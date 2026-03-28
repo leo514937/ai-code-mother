@@ -189,9 +189,6 @@
           ></iframe>
         </div>
       </div>
-      <div v-if="showAgentSidebar" class="agent-sidebar-section">
-        <AgentSidebar :app-id="appId" />
-      </div>
     </div>
 
     <!-- 应用详情弹窗 -->
@@ -230,8 +227,6 @@ import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import AppDetailModal from '@/components/AppDetailModal.vue'
 import DeploySuccessModal from '@/components/DeploySuccessModal.vue'
 import aiAvatar from '@/assets/aiAvatar.png'
-import { AgentSidebar } from '@/features/agent-sidebar'
-import { getAgentSidebarEnabled } from '@/features/agent-sidebar/api'
 import { API_BASE_URL, getStaticPreviewUrl } from '@/config/env'
 import { VisualEditor, type ElementInfo } from '@/utils/visualEditor'
 
@@ -247,7 +242,7 @@ import {
 const route = useRoute()
 const router = useRouter()
 const loginUserStore = useLoginUserStore()
-const showAgentSidebar = ref(false)
+const showAgentSidebar = ref(true)
 
 // 应用信息
 const appInfo = ref<API.AppVO>()
@@ -760,12 +755,8 @@ const getInputPlaceholder = () => {
 }
 
 const resolveAgentSidebarEnabled = async () => {
-  try {
-    showAgentSidebar.value = await getAgentSidebarEnabled()
-  } catch (error) {
-    console.warn('Failed to resolve agent sidebar availability', error)
-    showAgentSidebar.value = false
-  }
+  // 不强制依赖后端接口
+  showAgentSidebar.value = true
 }
 
 // 页面加载时获取应用信息

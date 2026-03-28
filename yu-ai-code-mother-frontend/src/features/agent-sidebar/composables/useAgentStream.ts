@@ -10,15 +10,22 @@ import {
 
 export const useAgentStream = () => {
   const isStreaming = ref(false)
-  const streamSnapshot = ref(createEmptyStreamSnapshot())
+  const persistedSnapshot = ref(createEmptyStreamSnapshot())
+  const liveSnapshot = ref(createEmptyStreamSnapshot())
   const activeAbortController = ref<AbortController>()
 
   const hydrateFromRecords = (records: AgentMessageRecord[]) => {
-    streamSnapshot.value = deriveStreamSnapshotFromRecords(records)
+    persistedSnapshot.value = deriveStreamSnapshotFromRecords(records)
+    liveSnapshot.value = createEmptyStreamSnapshot()
+  }
+
+  const clearLiveStreamState = () => {
+    liveSnapshot.value = createEmptyStreamSnapshot()
   }
 
   const resetStreamState = () => {
-    streamSnapshot.value = createEmptyStreamSnapshot()
+    persistedSnapshot.value = createEmptyStreamSnapshot()
+    clearLiveStreamState()
   }
 
   const stopStream = () => {
@@ -31,7 +38,7 @@ export const useAgentStream = () => {
     onEvent?: (event: AgentSseEvent) => void
   }) => {
     stopStream()
-    resetStreamState()
+    clearLiveStreamState()
 
     const controller = new AbortController()
     activeAbortController.value = controller
@@ -45,7 +52,7 @@ export const useAgentStream = () => {
           signal: controller.signal,
           onEvent: (rawEvent) => {
             const event = normalizeAgentSseEvent(rawEvent.event, rawEvent.data)
-            streamSnapshot.value = reduceAgentEvent(streamSnapshot.value, event)
+            liveSnapshot.value = reduceAgentEvent(liveSnapshot.value, event)
             options.onEvent?.(event)
           },
         },
@@ -58,12 +65,20 @@ export const useAgentStream = () => {
     }
   }
 
+  const mergedSnapshot = computed(() => ({
+    timeline: [...persistedSnapshot.value.timeline, ...liveSnapshot.value.timeline],
+    clarificationCard:
+      liveSnapshot.value.clarificationCard ?? persistedSnapshot.value.clarificationCard,
+    finalMessage: liveSnapshot.value.finalMessage || persistedSnapshot.value.finalMessage,
+    errorMessage: liveSnapshot.value.errorMessage || persistedSnapshot.value.errorMessage,
+  }))
+
   return {
     isStreaming,
-    timeline: computed(() => streamSnapshot.value.timeline),
-    clarificationCard: computed(() => streamSnapshot.value.clarificationCard),
-    finalMessage: computed(() => streamSnapshot.value.finalMessage),
-    errorMessage: computed(() => streamSnapshot.value.errorMessage),
+    timeline: computed(() => mergedSnapshot.value.timeline),
+    clarificationCard: computed(() => mergedSnapshot.value.clarificationCard),
+    finalMessage: computed(() => mergedSnapshot.value.finalMessage),
+    errorMessage: computed(() => mergedSnapshot.value.errorMessage),
     hydrateFromRecords,
     resetStreamState,
     stopStream,

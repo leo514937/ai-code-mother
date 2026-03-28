@@ -22,10 +22,19 @@
       <!-- 右侧：用户操作区域 -->
       <a-col>
         <div class="user-login-status">
-          <div v-if="loginUserStore.loginUser.id">
-            <a-dropdown>
-              <a-space>
-                <a-avatar :src="loginUserStore.loginUser.userAvatar" />
+          <a-space>
+            <a-tooltip title="切换智能助手">
+              <a-button type="text" @click="() => emit('toggle-sidebar')">
+                <template #icon>
+                  <LayoutOutlined />
+                </template>
+              </a-button>
+            </a-tooltip>
+            
+            <div v-if="loginUserStore.loginUser.id">
+              <a-dropdown>
+                <a-space>
+                  <a-avatar :src="loginUserStore.loginUser.userAvatar" />
                 {{ loginUserStore.loginUser.userName ?? '无名' }}
               </a-space>
               <template #overlay>
@@ -34,13 +43,14 @@
                     <LogoutOutlined />
                     退出登录
                   </a-menu-item>
-                </a-menu>
-              </template>
-            </a-dropdown>
-          </div>
-          <div v-else>
-            <a-button type="primary" href="/user/login">登录</a-button>
-          </div>
+                  </a-menu>
+                </template>
+              </a-dropdown>
+            </div>
+            <div v-else>
+              <a-button type="primary" href="/user/login">登录</a-button>
+            </div>
+          </a-space>
         </div>
       </a-col>
     </a-row>
@@ -53,8 +63,9 @@ import { useRouter } from 'vue-router'
 import { type MenuProps, message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser.ts'
 import { userLogout } from '@/api/userController.ts'
-import { LogoutOutlined, HomeOutlined } from '@ant-design/icons-vue'
+import { LogoutOutlined, HomeOutlined, LayoutOutlined } from '@ant-design/icons-vue'
 
+const emit = defineEmits(['toggle-sidebar'])
 const loginUserStore = useLoginUserStore()
 const router = useRouter()
 // 当前选中菜单

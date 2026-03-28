@@ -33,14 +33,12 @@
         v-model:value="draft"
         :auto-size="{ minRows: 3, maxRows: 5 }"
         :disabled="!appId || isStreaming"
-        placeholder="Ask the Python agent about requirements, context, or implementation details."
+        placeholder="请描述你的需求、背景或其他实施细节..."
         @keydown.enter="handleInputEnter"
       />
       <div class="composer-actions">
-        <div class="composer-hint">Enter to send, Shift + Enter for newline</div>
-        <a-button type="primary" :loading="isStreaming" @click="handleSubmit">
-          Send
-        </a-button>
+        <div class="composer-hint">Enter 发送, Shift + Enter 换行</div>
+        <a-button type="primary" :loading="isStreaming" @click="handleSubmit">发送</a-button>
       </div>
     </div>
   </aside>
@@ -88,7 +86,6 @@ const {
   timeline,
   clarificationCard,
   hydrateFromRecords,
-  finalMessage,
   errorMessage,
   resetStreamState,
   sendMessage,
@@ -171,7 +168,7 @@ const handleCreateThread = async () => {
     stopStream()
     await createThread()
   } catch (error) {
-    const errorMessageText = error instanceof Error ? error.message : 'Failed to create thread'
+    const errorMessageText = error instanceof Error ? error.message : '新建会话失败'
     sidebarError.value = errorMessageText
     message.error(errorMessageText)
   }
@@ -183,7 +180,7 @@ const handleSelectThread = async (threadId: string) => {
     stopStream()
     await selectThread(threadId)
   } catch (error) {
-    const errorMessageText = error instanceof Error ? error.message : 'Failed to load thread'
+    const errorMessageText = error instanceof Error ? error.message : '加载会话失败'
     sidebarError.value = errorMessageText
     message.error(errorMessageText)
   }
@@ -194,7 +191,7 @@ const handleArchiveThread = async (threadId: string) => {
     sidebarError.value = ''
     await archiveThread(threadId)
   } catch (error) {
-    const errorMessageText = error instanceof Error ? error.message : 'Failed to archive thread'
+    const errorMessageText = error instanceof Error ? error.message : '归档会话失败'
     sidebarError.value = errorMessageText
     message.error(errorMessageText)
   }
@@ -204,7 +201,7 @@ const processAgentEvent = (event: AgentSseEvent, assistantId: string) => {
   if (event.eventType === 'final') {
     patchAssistantMessage(
       assistantId,
-      extractEventPrimaryText(event) || finalMessage.value || 'Agent response completed.',
+      extractEventPrimaryText(event) || '助手回答已完成。',
       'done',
     )
   }
@@ -212,7 +209,7 @@ const processAgentEvent = (event: AgentSseEvent, assistantId: string) => {
   if (event.eventType === 'error') {
     patchAssistantMessage(
       assistantId,
-      extractEventPrimaryText(event) || 'Agent request failed.',
+      extractEventPrimaryText(event) || '助手请求出错。',
       'error',
     )
   }
@@ -239,7 +236,7 @@ const submitWithContent = async (content: string) => {
 
     const assistantMessage = displayMessages.value.find((item) => item.id === assistantId)
     if (assistantMessage && !assistantMessage.content) {
-      patchAssistantMessage(assistantId, 'Agent response completed.', 'done')
+      patchAssistantMessage(assistantId, '助手回答已完成。', 'done')
     }
 
     await refreshThreads(threadId)
@@ -247,9 +244,11 @@ const submitWithContent = async (content: string) => {
     if (error instanceof DOMException && error.name === 'AbortError') {
       return
     }
-    const errorMessageText = error instanceof Error ? error.message : 'Failed to send message'
+    const errorMessageText = error instanceof Error ? error.message : '发送消息失败'
     sidebarError.value = errorMessageText
-    const lastAssistant = [...displayMessages.value].reverse().find((item) => item.role === 'assistant')
+    const lastAssistant = [...displayMessages.value]
+      .reverse()
+      .find((item) => item.role === 'assistant')
     if (lastAssistant) {
       patchAssistantMessage(lastAssistant.id, errorMessageText, 'error')
     }
@@ -279,15 +278,10 @@ const handleInputEnter = (event: KeyboardEvent) => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  border-radius: 22px;
   overflow: hidden;
   background:
     radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
     linear-gradient(180deg, #ffffff, #f8fbff 52%, #ffffff);
-  box-shadow:
-    0 20px 50px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(219, 228, 240, 0.9);
 }
 
 .sidebar-composer {

@@ -2,21 +2,21 @@
   <section class="message-pane">
     <div class="pane-header">
       <div>
-        <div class="pane-title">Knowledge Agent</div>
-        <div class="pane-subtitle">{{ threadTitle || 'Select or create a thread' }}</div>
+        <div class="pane-title">知识库助手</div>
+        <div class="pane-subtitle">{{ threadTitle || '请选择或新建一个会话以开始。' }}</div>
       </div>
       <a-spin v-if="loading || isStreaming" size="small" />
     </div>
 
     <div ref="messageContainer" class="pane-body">
-      <div v-if="!hasThread" class="pane-empty">Create a thread to start chatting with the Python agent.</div>
-      <div v-else-if="!messages.length" class="pane-empty">No messages yet.</div>
+      <div v-if="!hasThread" class="pane-empty">请新建会话以向智能助手提问。</div>
+      <div v-else-if="!messages.length" class="pane-empty">暂无消息记录</div>
       <div v-for="message in messages" :key="message.id" class="message-row" :class="message.role">
         <div class="message-bubble" :class="message.role">
           <MarkdownRenderer v-if="message.role === 'assistant'" :content="message.content || ''" />
           <div v-else>{{ message.content }}</div>
-          <div v-if="message.status === 'streaming'" class="message-status">Streaming...</div>
-          <div v-if="message.status === 'error'" class="message-status error">Failed</div>
+          <div v-if="message.status === 'streaming'" class="message-status">生成中...</div>
+          <div v-if="message.status === 'error'" class="message-status error">失败</div>
         </div>
       </div>
     </div>

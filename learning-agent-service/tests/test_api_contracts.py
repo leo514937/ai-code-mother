@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 from pydantic import ValidationError
 
 import app as app_module
+from learning_agent_service.api import internal_auth
 from learning_agent_service.api.contracts import (
     ApiResponse,
     ChatStreamRequest,
@@ -70,7 +73,24 @@ class _MockService:
         return SessionStateResponse(session_id=session_id, current_topic="Spring")
 
 
+async def _collect_body_chunks(response) -> list[str]:
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+    return chunks
+
+
 class ApiContractsTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._token_patch = patch.dict(os.environ, {"LEARNING_AGENT_INTERNAL_API_TOKEN": ""}, clear=False)
+        self._token_patch.start()
+        internal_auth.get_settings.cache_clear()
+        self.addCleanup(self._cleanup_internal_token_patch)
+
+    def _cleanup_internal_token_patch(self) -> None:
+        self._token_patch.stop()
+        internal_auth.get_settings.cache_clear()
+
     def test_public_event_type_enum_only_contains_runtime_supported_events(self) -> None:
         self.assertEqual(
             {event.value for event in EventType},
@@ -161,7 +181,7 @@ class ApiContractsTestCase(unittest.TestCase):
                 )
             )
         )
-        chunks = list(response.body_iterator)
+        chunks = asyncio.run(_collect_body_chunks(response))
         self.assertEqual(len(chunks), 2)
         self.assertIn("event: ack", chunks[0])
         self.assertIn("event: final", chunks[1])

@@ -1,0 +1,42 @@
+﻿
+> yu-ai-code-mother-frontend@0.0.0 lint
+> eslint . --fix
+
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\appController.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\chatHistoryController.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\healthController.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\index.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\staticResourceController.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\api\userController.ts
+  1:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\components\GlobalHeader.vue
+  63:23  error  'from' is defined but never used  @typescript-eslint/no-unused-vars
+  63:29  error  'next' is defined but never used  @typescript-eslint/no-unused-vars
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\pages\app\AppChatPage.vue
+  234:10  error  'getAgentSidebarEnabled' is defined but never used  @typescript-eslint/no-unused-vars
+  254:19  error  Unexpected any. Specify a different type            @typescript-eslint/no-explicit-any
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\pages\user\UserLoginPage.vue
+  47:37  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\stores\loginUser.ts
+  23:39  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+D:\javacode\ai-code-mother\yu-ai-code-mother-frontend\src\utils\visualEditor.ts
+  139:55  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+鉁?13 problems (13 errors, 0 warnings)
+

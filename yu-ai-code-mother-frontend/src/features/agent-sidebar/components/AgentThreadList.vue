@@ -2,17 +2,17 @@
   <section class="thread-list">
     <div class="thread-header">
       <div>
-        <div class="header-title">Agent Threads</div>
-        <div class="header-subtitle">Separate from the code generation chat.</div>
+        <div class="header-title">智能助手会话</div>
+        <div class="header-subtitle">与代码生成主会话相互独立</div>
       </div>
       <a-button type="primary" size="small" :loading="creating" @click="$emit('create')">
-        New
+        新建
       </a-button>
     </div>
 
     <div class="thread-body">
-      <div v-if="loading && !threads.length" class="thread-empty">Loading threads...</div>
-      <div v-else-if="!threads.length" class="thread-empty">No threads yet.</div>
+      <div v-if="loading && !threads.length" class="thread-empty">加载中...</div>
+      <div v-else-if="!threads.length" class="thread-empty">暂无会话记录</div>
       <button
         v-for="thread in threads"
         :key="thread.id"
@@ -22,7 +22,7 @@
         @click="$emit('select', thread.id)"
       >
         <div class="thread-item-main">
-          <div class="thread-title">{{ thread.title || 'New Thread' }}</div>
+          <div class="thread-title">{{ thread.title || '新会话' }}</div>
           <div class="thread-time">{{ thread.lastMessageAt || thread.createTime || '' }}</div>
         </div>
         <a-button
@@ -32,7 +32,7 @@
           :loading="archivingThreadId === thread.id"
           @click.stop="$emit('archive', thread.id)"
         >
-          Archive
+          归档
         </a-button>
       </button>
     </div>

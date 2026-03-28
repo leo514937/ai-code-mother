@@ -4,13 +4,16 @@ from ..compat import APIRouter
 from ..contracts import StudyPlanGenerateRequest, StudyPlanGenerateResponse
 from ..dependencies import LearningAgentService
 from ..errors import raise_http_error
+from ..internal_auth import internal_token_header, require_internal_token
 
 
 def register_study_plan_routes(router: APIRouter, service: LearningAgentService) -> None:
     @router.post("/internal/v1/study-plan/generate")
     async def generate_study_plan(
         request: StudyPlanGenerateRequest,
+        x_internal_token: str | None = internal_token_header(),
     ) -> StudyPlanGenerateResponse:
+        require_internal_token(x_internal_token)
         try:
             return service.generate_study_plan(request)
         except RuntimeError as exc:

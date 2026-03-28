@@ -15,7 +15,7 @@ export async function addApp(body: API.AppAddRequest, options?: { [key: string]:
 }
 
 /** 此处后端没有提供注释 POST /app/admin/delete */
-export async function deleteAppByAdmin(body: API.DeleteRequest, options?: { [key: string]: any }) {
+export async function deleteAppByAdmin(body: API.API_DeleteRequest, options?: { [key: string]: any }) {
   return request<API.BaseResponseBoolean>('/app/admin/delete', {
     method: 'POST',
     headers: {
@@ -87,7 +87,7 @@ export async function chatToGenCode(
 }
 
 /** 此处后端没有提供注释 POST /app/delete */
-export async function deleteApp(body: API.DeleteRequest, options?: { [key: string]: any }) {
+export async function deleteApp(body: API.API_DeleteRequest, options?: { [key: string]: any }) {
   return request<API.BaseResponseBoolean>('/app/delete', {
     method: 'POST',
     headers: {
