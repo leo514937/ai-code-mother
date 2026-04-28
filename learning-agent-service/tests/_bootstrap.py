@@ -1,7 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "logfire-plugin")
 
 TESTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TESTS_DIR.parent

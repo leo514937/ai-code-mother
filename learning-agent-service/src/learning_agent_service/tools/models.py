@@ -22,6 +22,9 @@ class ToolSpec:
     idempotent: bool
     retryable: bool
     side_effect_level: SideEffectLevel
+    risk_level: str = "low"
+    allowed_execution_modes: tuple[str, ...] = ("auto", "simple", "plan_execute")
+    requires_approval: bool = False
     fallback_strategy: Optional[str] = None
     degrade_to: Optional[str] = None
     timeout_ms: int = 5000

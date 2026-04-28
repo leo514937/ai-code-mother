@@ -65,6 +65,12 @@ class RedisSessionContextStore(SessionContextPort):
         summary_payload = {
             "current_topic": context.current_topic,
             "last_retrieval_topic": context.last_retrieval_topic,
+            "history_summary": context.history_summary,
+            "open_questions": list(context.open_questions),
+            "confirmed_facts": list(context.confirmed_facts),
+            "next_steps": list(context.next_steps),
+            "summary_version": context.summary_version,
+            "summary_updated_at": context.summary_updated_at.isoformat() if context.summary_updated_at else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self.runtime.client.set(summary_key, json.dumps(summary_payload))

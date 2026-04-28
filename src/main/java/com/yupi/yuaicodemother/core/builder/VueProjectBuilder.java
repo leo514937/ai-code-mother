@@ -20,14 +20,16 @@ public class VueProjectBuilder {
      * @param projectPath
      */
     public void buildProjectAsync(String projectPath) {
-        Thread.ofVirtual().name("vue-builder-" + System.currentTimeMillis())
-                .start(() -> {
-                    try {
-                        buildProject(projectPath);
-                    } catch (Exception e) {
-                        log.error("异步构建 Vue 项目时发生异常: {}", e.getMessage(), e);
-                    }
-                });
+        Thread buildThread = new Thread(() -> {
+            try {
+                buildProject(projectPath);
+            } catch (Exception e) {
+                log.error("异步构建 Vue 项目时发生异常: {}", e.getMessage(), e);
+            }
+        });
+        buildThread.setName("vue-builder-" + System.currentTimeMillis());
+        buildThread.setDaemon(true);
+        buildThread.start();
     }
 
     /**

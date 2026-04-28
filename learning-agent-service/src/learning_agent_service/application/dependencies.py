@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import re
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 from learning_agent_service.config import Settings, get_settings
@@ -37,14 +41,48 @@ from learning_agent_service.infrastructure.repositories import (
     TopicMasteryRepository,
     UserPreferenceRepository,
 )
+from learning_agent_service.infrastructure.repositories.memory_trace_repository import MemoryTraceRepository
+from learning_agent_service.infrastructure.memory import (
+    DurableLongTermMemoryStore,
+    DurableSemanticMemoryStore,
+    LongTermMemoryRepository,
+    QdrantLongTermMemoryIndex,
+)
 from learning_agent_service.infrastructure.repositories.in_memory import (
     InMemoryAsyncLogStore,
     InMemorySessionContextStore,
     InMemoryTopicMasteryStore,
 )
 from learning_agent_service.memory.service import MemoryService
+from learning_agent_service.memory.orchestrator import MemoryOrchestrator
+from learning_agent_service.memory import (
+    MemoryConsolidationJob,
+    MemoryConflictResolver,
+    MemoryGovernancePolicy,
+    MemoryInjectionPolicy,
+    MemoryPromotionPolicy,
+    MemoryRetrievalPolicy,
+    RecommendationService,
+    TopicMasteryUpdater,
+)
+from learning_agent_service.memory.stores import InMemoryLongTermMemoryStore
 from learning_agent_service.rag.models import KnowledgeChunk
 from learning_agent_service.rag.heuristics import HeuristicModelGateway
+from learning_agent_service.rag.retrieval import (
+    CrossEncoderReranker,
+    HeuristicDenseRetriever,
+    HeuristicMetadataRetriever,
+    HeuristicReranker,
+    HeuristicSparseRetriever,
+    LocalBM25SparseRetriever,
+    ParentChildResolver,
+    QdrantFilterBuilder,
+    QdrantMetadataRetriever,
+    QdrantOnlineDenseRetriever,
+    RemoteCrossEncoderReranker,
+    RemoteReranker,
+)
+from learning_agent_service.rag.rewrite import QueryRewriteService
 from learning_agent_service.rag.service import DEFAULT_KNOWLEDGE_CHUNKS, HybridRAGOrchestrator
 from learning_agent_service.tools.service import (
     AnswerComposer,
@@ -54,6 +92,13 @@ from learning_agent_service.tools.service import (
     ToolResultNormalizer,
 )
 
+try:
+    from langgraph.checkpoint.sqlite import SqliteSaver
+except Exception:  # pragma: no cover - optional dependency path
+    SqliteSaver = None
+
+_SPARSE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
+
 
 @dataclass(frozen=True)
 class RepositoryBundle:
@@ -61,6 +106,196 @@ class RepositoryBundle:
     preferences: Optional[UserPreferenceRepository] = None
     learning_plans: Optional[LearningPlanRepository] = None
     topic_mastery: Optional[TopicMasteryRepository] = None
+    memory_traces: Optional[MemoryTraceRepository] = None
+
+
+@dataclass(frozen=True)
+class OpenAIEmbeddingAdapter:
+    runtime: OpenAIRuntime
+    model: str
+
+    def embed(self, text: str) -> list[float]:
+        client = self.runtime.client
+        embeddings = getattr(client, "embeddings", None)
+        if embeddings is None or not hasattr(embeddings, "create"):
+            raise RuntimeError("OpenAI runtime does not expose embeddings API")
+        response = embeddings.create(model=self.model or self.runtime.default_model, input=text)
+        data = getattr(response, "data", None) or []
+        if not data:
+            raise RuntimeError("OpenAI embeddings API returned no vectors")
+        vector = getattr(data[0], "embedding", None)
+        if vector is None:
+            raise RuntimeError("OpenAI embeddings API returned an empty embedding")
+        return list(vector)
+
+
+@dataclass(frozen=True)
+class OpenAIQueryRewriteAdapter:
+    runtime: OpenAIRuntime
+    model: str
+    temperature: float = 0.0
+
+    def __call__(self, context, base_plan, fallback_reason: str) -> Mapping[str, Any]:
+        client = self.runtime.client
+        responses = getattr(client, "responses", None)
+        if responses is None or not hasattr(responses, "create"):
+            raise RuntimeError("OpenAI runtime does not expose Responses API")
+
+        prompt = {
+            "raw_query": context.raw_query,
+            "resolved_topic": context.resolved_topic,
+            "session_topic": context.session_topic,
+            "intent": context.intent,
+            "requested_output_style": context.requested_output_style,
+            "intent_confidence": context.intent_confidence,
+            "fallback_reason": fallback_reason,
+            "semantic_query": base_plan.semantic_query,
+            "keyword_query": base_plan.keyword_query,
+            "retrieval_filters": base_plan.retrieval_filters.as_dict(),
+            "user_preferences": dict(context.user_preferences),
+        }
+        response = responses.create(
+            model=self.model or self.runtime.default_model,
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You rewrite retrieval queries for a hybrid RAG system. "
+                                "Return strict JSON with keys: semantic_query, keyword_query, rewritten_queries, step_back_query, retrieval_filters, filter_confidence."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}],
+                },
+            ],
+            temperature=self.temperature,
+            max_output_tokens=300,
+        )
+        return json.loads(_extract_response_text(response))
+
+
+@dataclass(frozen=True)
+class OpenAIHyDEAdapter:
+    runtime: OpenAIRuntime
+    model: str
+    temperature: float = 0.0
+
+    def __call__(self, context, base_plan, trigger_reason: str) -> Mapping[str, Any]:
+        client = self.runtime.client
+        responses = getattr(client, "responses", None)
+        if responses is None or not hasattr(responses, "create"):
+            raise RuntimeError("OpenAI runtime does not expose Responses API")
+
+        prompt = {
+            "raw_query": context.raw_query,
+            "resolved_topic": context.resolved_topic,
+            "session_topic": context.session_topic,
+            "intent": context.intent,
+            "requested_output_style": context.requested_output_style,
+            "intent_confidence": context.intent_confidence,
+            "trigger_reason": trigger_reason,
+            "semantic_query": base_plan.semantic_query,
+            "keyword_query": base_plan.keyword_query,
+            "retrieval_filters": base_plan.retrieval_filters.as_dict(),
+            "user_preferences": dict(context.user_preferences),
+        }
+        response = responses.create(
+            model=self.model or self.runtime.default_model,
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You generate a concise hypothetical passage to improve sparse retrieval. "
+                                "Return strict JSON with keys: hyde_passage, hyde_title, hyde_keywords."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}],
+                },
+            ],
+            temperature=self.temperature,
+            max_output_tokens=220,
+        )
+        return json.loads(_extract_response_text(response))
+
+
+@dataclass(frozen=True)
+class OpenAIAnswerComposeAdapter:
+    runtime: OpenAIRuntime
+    model: str
+    temperature: float = 0.0
+
+    def __call__(self, request: AnswerComposeRequest) -> Mapping[str, Any]:
+        client = self.runtime.client
+        responses = getattr(client, "responses", None)
+        if responses is None or not hasattr(responses, "create"):
+            raise RuntimeError("OpenAI runtime does not expose Responses API")
+
+        rag_result = request.rag_result
+        evidence_pack = rag_result.evidence_pack if rag_result else None
+        evidence_items = []
+        if evidence_pack is not None:
+            for item in evidence_pack.items[:4]:
+                evidence_items.append(
+                    {
+                        "chunk_id": item.chunk_id,
+                        "content": item.content,
+                        "score": item.score,
+                        "tier": item.tier,
+                        "citation_chunk_id": item.citation_chunk_id,
+                        "source_chunk_id": item.source_chunk_id,
+                        "parent_chunk_id": item.parent_chunk_id,
+                        "metadata": dict(item.metadata),
+                    }
+                )
+        prompt = {
+            "raw_query": request.raw_query,
+            "requested_output_style": request.requested_output_style.value if request.requested_output_style else None,
+            "evidence_status": getattr(evidence_pack, "evidence_status", getattr(rag_result, "evidence_status", "EMPTY")) if rag_result else "EMPTY",
+            "evidence_items": evidence_items,
+            "citations": [c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c) for c in (rag_result.citations if rag_result else [])],
+            "plan_summary": request.plan_summary.model_dump(mode="json") if request.plan_summary else None,
+            "tool_result": request.tool_result.model_dump(mode="json") if request.tool_result else None,
+            "recommendation": request.recommendation.model_dump(mode="json") if request.recommendation else None,
+            "memory_injection_plan": request.memory_injection_plan.model_dump(mode="json") if request.memory_injection_plan else None,
+        }
+        response = responses.create(
+            model=self.model or self.runtime.default_model,
+            input=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You are a grounded answer composer for a RAG system. "
+                                "You must answer only from the provided evidence and citations. "
+                                "Do not invent facts. Return strict JSON with keys: answer_text, confidence."
+                            ),
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}],
+                },
+            ],
+            temperature=self.temperature,
+            max_output_tokens=500,
+        )
+        return json.loads(_extract_response_text(response))
 
 
 @dataclass(frozen=True)
@@ -81,6 +316,9 @@ class MemoryDeps:
     mastery_store: object
     async_log_store: object
     memory_service: MemoryServicePort
+    memory_orchestrator: MemoryOrchestrator
+    long_term_store: object | None = None
+    trace_repository: object | None = None
     preference_store: object | None = None
     learning_plan_store: object | None = None
     semantic_memory_store: object | None = None
@@ -107,6 +345,7 @@ class ApplicationRuntime:
     repositories: RepositoryBundle
     runtime_dependency_status: RuntimeDependencyStatus
     runtime_profile: RuntimeProfile
+    workflow_checkpointer: object | None
     understanding: UnderstandingDeps
     rag: RagDeps
     memory: MemoryDeps
@@ -136,6 +375,31 @@ class ApplicationRuntime:
     @property
     def memory_service(self) -> MemoryServicePort:
         return self.memory.memory_service
+
+    @property
+    def memory_orchestrator(self) -> MemoryOrchestrator:
+        return self.memory.memory_orchestrator
+
+    @property
+    def long_term_store(self) -> object | None:
+        return self.memory.long_term_store
+
+    @property
+    def trace_repository(self) -> object | None:
+        return self.memory.trace_repository
+
+    @property
+    def memory_trace_repository(self) -> object | None:
+        return self.memory.trace_repository
+
+    @property
+    def outbox_repository(self) -> OutboxRepository | None:
+        return self.repositories.outbox
+
+    @property
+    def long_term_repository(self) -> object | None:
+        store = self.memory.long_term_store
+        return getattr(store, "repository", None) if store is not None else None
 
     @property
     def tool_planner(self) -> ToolPlannerPort:
@@ -279,7 +543,8 @@ def build_dependencies(settings: Settings | None = None) -> AppDependencies:
     rag = _build_rag_deps(resolved, infra)
     memory = _build_memory_deps(resolved, infra, repositories)
     tools = _build_tool_deps(rag.rag_orchestrator)
-    streaming = _build_streaming_deps(resolved)
+    streaming = _build_streaming_deps(resolved, infra)
+    workflow_checkpointer = _build_workflow_checkpointer(resolved)
 
     adapter_statuses = (
         understanding.status,
@@ -302,6 +567,7 @@ def build_dependencies(settings: Settings | None = None) -> AppDependencies:
         repositories=repositories,
         runtime_dependency_status=runtime_dependency_status,
         runtime_profile=runtime_profile,
+        workflow_checkpointer=workflow_checkpointer,
         understanding=understanding,
         rag=rag,
         memory=memory,
@@ -327,17 +593,135 @@ def _build_rag_deps(
     return RagDeps(rag_orchestrator=rag_orchestrator, status=status)
 
 
+def _build_query_rewrite_service(settings: Settings, infra: InfrastructureClients) -> QueryRewriteService:
+    llm_rewriter = None
+    if settings.enable_llm_query_rewrite and infra.openai is not None:
+        llm_rewriter = OpenAIQueryRewriteAdapter(
+            runtime=infra.openai,
+            model=settings.llm_query_rewrite_model or infra.openai.default_model,
+            temperature=settings.llm_query_rewrite_temperature,
+        )
+    hyde_rewriter = None
+    if settings.enable_hyde_sparse_retrieval and infra.openai is not None:
+        hyde_rewriter = OpenAIHyDEAdapter(
+            runtime=infra.openai,
+            model=settings.hyde_sparse_retrieval_model or infra.openai.default_model,
+            temperature=settings.hyde_sparse_retrieval_temperature,
+        )
+    policy = settings.policy_settings()
+    return QueryRewriteService(policy.query_rewrite, llm_rewriter=llm_rewriter, hyde_rewriter=hyde_rewriter)
+
+
+def _build_dense_retriever(
+    settings: Settings,
+    infra: InfrastructureClients,
+    chunks: tuple[KnowledgeChunk, ...],
+    parent_child_resolver: ParentChildResolver,
+    filter_builder: QdrantFilterBuilder,
+):
+    fallback = HeuristicDenseRetriever(chunks, parent_child_resolver, filter_builder=filter_builder)
+    if settings.enable_online_dense_retrieval and infra.qdrant is not None and infra.openai is not None:
+        return QdrantOnlineDenseRetriever(
+            client=infra.qdrant.client,
+            collection_name=infra.qdrant.knowledge_collection,
+            vector_name=infra.qdrant.knowledge_vector_name,
+            embedding_adapter=OpenAIEmbeddingAdapter(
+                runtime=infra.openai,
+                model=settings.openai.embedding_model,
+            ),
+            fallback=fallback,
+            enabled=True,
+            filter_builder=filter_builder,
+        )
+    return fallback
+
+
+def _build_sparse_retriever(
+    settings: Settings,
+    infra: InfrastructureClients,
+    chunks: tuple[KnowledgeChunk, ...],
+    parent_child_resolver: ParentChildResolver,
+    filter_builder: QdrantFilterBuilder,
+):
+    fallback = HeuristicSparseRetriever(chunks, parent_child_resolver, filter_builder=filter_builder)
+    bm25_retriever = LocalBM25SparseRetriever(
+        chunks,
+        parent_child_resolver,
+        fallback=fallback,
+        enabled=settings.enable_bm25_sparse_retrieval,
+        k1=settings.bm25_k1,
+        b=settings.bm25_b,
+        filter_builder=filter_builder,
+    )
+    return bm25_retriever
+
+
+def _build_metadata_retriever(
+    settings: Settings,
+    infra: InfrastructureClients,
+    chunks: tuple[KnowledgeChunk, ...],
+    parent_child_resolver: ParentChildResolver,
+    filter_builder: QdrantFilterBuilder,
+):
+    fallback = HeuristicMetadataRetriever(chunks, parent_child_resolver, filter_builder=filter_builder)
+    if (settings.enable_online_dense_retrieval or settings.enable_online_sparse_retrieval) and infra.qdrant is not None and infra.openai is not None:
+        return QdrantMetadataRetriever(
+            client=infra.qdrant.client,
+            collection_name=infra.qdrant.knowledge_collection,
+            vector_name=infra.qdrant.knowledge_vector_name,
+            embedding_adapter=OpenAIEmbeddingAdapter(
+                runtime=infra.openai,
+                model=settings.openai.embedding_model,
+            ),
+            fallback=fallback,
+            enabled=True,
+            filter_builder=filter_builder,
+            scroll_fallback_enabled=settings.enable_online_dense_retrieval or settings.enable_online_sparse_retrieval,
+        )
+    return fallback
+
+
+def _build_reranker(settings: Settings) -> HeuristicReranker | RemoteReranker | CrossEncoderReranker:
+    fallback = HeuristicReranker()
+    provider = (settings.reranker_provider or ("remote" if settings.enable_remote_reranker else "heuristic")).strip().lower()
+    if provider == "remote":
+        return RemoteCrossEncoderReranker(
+            endpoint=settings.remote_reranker_endpoint,
+            api_key=settings.remote_reranker_api_key,
+            timeout_seconds=settings.remote_reranker_timeout_seconds,
+            model=settings.remote_reranker_model,
+            fallback=fallback,
+            enabled=True,
+        )
+    return fallback
+
+
+def _memory_fallback_allowed(settings: Settings) -> bool:
+    environment = (settings.environment or settings.app.environment or "").strip().lower()
+    return bool(
+        settings.allow_in_memory_fallback
+        and (settings.debug or environment in {"development", "dev", "local", "test", "testing", "ci"})
+    )
+
+
 def _build_memory_deps(
     settings: Settings,
     infra: InfrastructureClients,
     repositories: RepositoryBundle,
 ) -> MemoryDeps:
+    policy = settings.policy_settings()
     session_context_store, session_status = _build_session_context_store(settings, infra)
     mastery_store, mastery_status = _build_mastery_store(settings, repositories)
     async_log_store, async_log_status = _build_async_log_store(settings, repositories)
     preference_store, preference_status = _build_preference_store(repositories)
     learning_plan_store, learning_plan_status = _build_learning_plan_store(repositories)
-    semantic_memory_store, semantic_status = _build_semantic_memory_store(settings, infra)
+    durable_backend = _build_durable_memory_backend(settings, infra)
+    if durable_backend is not None:
+        long_term_store, semantic_memory_store, long_term_status, semantic_status = durable_backend
+    else:
+        long_term_store, long_term_status = _build_long_term_memory_store(settings, infra)
+        semantic_memory_store, semantic_status = _build_semantic_memory_store(settings, infra)
+    trace_repository = _build_memory_trace_repository(repositories)
 
     memory_service = MemoryService(
         session_store=session_context_store,
@@ -347,17 +731,53 @@ def _build_memory_deps(
         preference_store=preference_store,
         learning_plan_store=learning_plan_store,
         semantic_memory_store=semantic_memory_store,
+        mastery_updater=TopicMasteryUpdater(config=policy.mastery),
+        promotion_policy=MemoryPromotionPolicy(
+            config=policy.memory_promotion,
+            governance=MemoryGovernancePolicy(config=policy.memory_governance),
+        ),
+        recommendation_service=RecommendationService(config=policy.memory_recommendation),
+    )
+    memory_orchestrator = MemoryOrchestrator(
+        session_store=session_context_store,
+        mastery_store=mastery_store,
+        long_term_store=long_term_store,
+        trace_repository=trace_repository,
+        retrieval_policy=MemoryRetrievalPolicy(config=policy.memory_retrieval),
+        injection_policy=MemoryInjectionPolicy(config=policy.memory_injection),
+        consolidation_job=MemoryConsolidationJob(config=policy.consolidation),
+        promotion_policy=MemoryPromotionPolicy(
+            config=policy.memory_promotion,
+            governance=MemoryGovernancePolicy(config=policy.memory_governance),
+        ),
+        conflict_resolver=MemoryConflictResolver(config=policy.memory_conflict),
+        policy=policy.orchestrator,
     )
     return MemoryDeps(
         session_context_store=session_context_store,
         mastery_store=mastery_store,
         async_log_store=async_log_store,
         memory_service=memory_service,
+        memory_orchestrator=memory_orchestrator,
+        long_term_store=long_term_store,
+        trace_repository=trace_repository,
         preference_store=preference_store,
         learning_plan_store=learning_plan_store,
         semantic_memory_store=semantic_memory_store,
-        statuses=(session_status, mastery_status, async_log_status, preference_status, learning_plan_status, semantic_status),
+        statuses=(
+            session_status,
+            mastery_status,
+            async_log_status,
+            preference_status,
+            learning_plan_status,
+            long_term_status,
+            semantic_status,
+        ),
     )
+
+
+def _build_memory_trace_repository(repositories: RepositoryBundle) -> Optional[MemoryTraceRepository]:
+    return repositories.memory_traces
 
 
 def _build_tool_deps(rag_orchestrator: RAGOrchestratorPort) -> ToolDeps:
@@ -375,11 +795,30 @@ def _build_tool_deps(rag_orchestrator: RAGOrchestratorPort) -> ToolDeps:
     )
 
 
-def _build_streaming_deps(settings: Settings) -> StreamingDeps:
+def _build_streaming_deps(settings: Settings, infra: InfrastructureClients) -> StreamingDeps:
+    llm_answerer = None
+    if settings.prefer_real_adapters and infra.openai is not None:
+        llm_answerer = OpenAIAnswerComposeAdapter(
+            runtime=infra.openai,
+            model=infra.openai.default_model,
+            temperature=0.0,
+        )
     return StreamingDeps(
-        answer_composer=AnswerComposer(),
+        answer_composer=AnswerComposer(llm_answerer=llm_answerer),
         finalizer=Finalizer(settings=settings),
     )
+
+
+def _build_workflow_checkpointer(settings: Settings) -> object | None:
+    if not settings.workflow_checkpoint_enabled:
+        return None
+    if SqliteSaver is None:
+        raise RuntimeError("SqliteSaver is unavailable in the current runtime")
+
+    sqlite_path = Path(settings.workflow_checkpoint_sqlite_path).expanduser()
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(sqlite_path), check_same_thread=False)
+    return SqliteSaver(connection)
 
 
 def _build_model_gateway(
@@ -417,33 +856,57 @@ def _build_rag_orchestrator(
     infra: InfrastructureClients,
 ) -> tuple[HybridRAGOrchestrator, AdapterStatus]:
     load_error: Optional[Exception] = None
+    chunks: tuple[KnowledgeChunk, ...] = ()
     if settings.prefer_real_adapters and infra.qdrant is not None:
-        chunks: tuple[KnowledgeChunk, ...] = ()
         try:
             chunks = _load_qdrant_knowledge_chunks(infra.qdrant)
         except Exception as exc:  # pragma: no cover - defensive fallback
             load_error = exc
-        if chunks:
-            return (
-                HybridRAGOrchestrator(settings=settings, knowledge_chunks=chunks),
-                AdapterStatus(
-                    name="rag_runtime",
-                    mode="real",
-                    ready=True,
-                    details={
-                        "backend": "qdrant_snapshot",
-                        "runtime_mode": "snapshot",
-                        "knowledge_collection": infra.qdrant.knowledge_collection,
-                        "chunk_count": len(chunks),
-                    },
-                ),
-            )
         if load_error is not None and not settings.allow_in_memory_fallback:
             raise RuntimeError("Qdrant knowledge runtime is unavailable and in-memory fallback is disabled") from load_error
         if not chunks and not settings.allow_in_memory_fallback:
             raise RuntimeError("Qdrant knowledge runtime is unavailable and in-memory fallback is disabled")
+
+    active_chunks = chunks or DEFAULT_KNOWLEDGE_CHUNKS
+    parent_child_resolver = ParentChildResolver(active_chunks)
+    filter_builder = QdrantFilterBuilder()
+    rewrite_service = _build_query_rewrite_service(settings, infra)
+    dense_retriever = _build_dense_retriever(settings, infra, active_chunks, parent_child_resolver, filter_builder)
+    sparse_retriever = _build_sparse_retriever(settings, infra, active_chunks, parent_child_resolver, filter_builder)
+    metadata_retriever = _build_metadata_retriever(settings, infra, active_chunks, parent_child_resolver, filter_builder)
+    reranker = _build_reranker(settings)
+
+    orchestrator = HybridRAGOrchestrator(
+        settings=settings,
+        knowledge_chunks=active_chunks,
+        dense_retriever=dense_retriever,
+        sparse_retriever=sparse_retriever,
+        metadata_retriever=metadata_retriever,
+        reranker=reranker,
+        rewrite_service=rewrite_service,
+        parent_child_resolver=parent_child_resolver,
+    )
+
+    if chunks:
+        return (
+            orchestrator,
+            AdapterStatus(
+                name="rag_runtime",
+                mode="real",
+                ready=True,
+                details={
+                    "backend": "qdrant_snapshot",
+                    "runtime_mode": "snapshot",
+                    "knowledge_collection": infra.qdrant.knowledge_collection if infra.qdrant is not None else None,
+                    "chunk_count": len(chunks),
+                    "online_dense_enabled": settings.enable_online_dense_retrieval,
+                    "llm_rewrite_enabled": settings.enable_llm_query_rewrite,
+                },
+            ),
+        )
+
     return (
-        HybridRAGOrchestrator(settings=settings, knowledge_chunks=DEFAULT_KNOWLEDGE_CHUNKS),
+        orchestrator,
         AdapterStatus(
             name="rag_runtime",
             mode="fallback",
@@ -452,10 +915,37 @@ def _build_rag_orchestrator(
                 "backend": "in_memory_chunks",
                 "runtime_mode": "fallback",
                 "reason": "qdrant_unavailable_empty_or_disabled",
+                "online_dense_enabled": settings.enable_online_dense_retrieval,
+                "llm_rewrite_enabled": settings.enable_llm_query_rewrite,
                 **({"fallback_from": "qdrant", "error": type(load_error).__name__} if load_error is not None else {}),
             },
         ),
     )
+
+
+def _build_sparse_query_adapter():
+    class TokenBagSparseQueryAdapter:
+        def encode(self, text: str) -> Mapping[str, Any]:
+            tokens = tuple(_tokenize_sparse_query(text))
+            return {
+                "indices": [
+                    _stable_sparse_index(token) for token in tokens
+                ],
+                "values": [1.0 for _ in tokens],
+            }
+
+    return TokenBagSparseQueryAdapter()
+
+
+def _tokenize_sparse_query(text: str) -> tuple[str, ...]:
+    if not text:
+        return ()
+    return tuple(token.lower() for token in _SPARSE_TOKEN_PATTERN.findall(text))
+
+
+def _stable_sparse_index(token: str) -> int:
+    digest = hashlib.sha1(token.lower().encode("utf-8")).hexdigest()
+    return int(digest[:12], 16) % 2_000_000_000
 
 
 def _build_repository_bundle(infra: InfrastructureClients) -> RepositoryBundle:
@@ -468,6 +958,7 @@ def _build_repository_bundle(infra: InfrastructureClients) -> RepositoryBundle:
         preferences=UserPreferenceRepository(session_factory),
         learning_plans=LearningPlanRepository(session_factory),
         topic_mastery=TopicMasteryRepository(session_factory),
+        memory_traces=MemoryTraceRepository(session_factory),
     )
 
 
@@ -515,48 +1006,17 @@ def _point_to_knowledge_chunk(point: Any) -> Optional[KnowledgeChunk]:
         payload = point.get("payload")
     if not isinstance(payload, Mapping):
         return None
-
-    chunk_id = payload.get("chunk_id") or getattr(point, "id", None) or (
-        point.get("id") if isinstance(point, Mapping) else None
-    )
-    text = payload.get("text") or payload.get("content")
-    document_id = payload.get("document_id") or payload.get("doc_id") or payload.get("source_id")
-    if not chunk_id or not text or not document_id:
-        return None
-
-    return KnowledgeChunk(
-        chunk_id=str(chunk_id),
-        document_id=str(document_id),
-        text=str(text),
-        title=str(payload.get("title") or chunk_id),
-        category=_optional_str(payload.get("category")),
-        subcategory=_optional_str(payload.get("subcategory")),
-        difficulty=_optional_str(payload.get("difficulty")),
-        source_type=_optional_str(payload.get("source_type")),
-        chunk_type=_optional_str(payload.get("chunk_type")),
-        version=_optional_str(payload.get("version")),
-        tags=tuple(str(tag) for tag in payload.get("tags", ()) if tag),
-        metadata={
-            key: value
-            for key, value in payload.items()
-            if key
-            not in {
-                "chunk_id",
-                "document_id",
-                "doc_id",
-                "source_id",
-                "text",
-                "content",
-                "title",
-                "category",
-                "subcategory",
-                "difficulty",
-                "source_type",
-                "chunk_type",
-                "version",
-                "tags",
-            }
-        },
+    chunk_id = payload.get("chunk_id") or getattr(point, "id", None) or (point.get("id") if isinstance(point, Mapping) else None)
+    extended_payload = dict(payload)
+    if chunk_id is not None:
+        extended_payload.setdefault("chunk_id", chunk_id)
+    return KnowledgeChunk.from_payload(
+        extended_payload,
+        fallback_chunk_id=str(chunk_id) if chunk_id is not None else None,
+        fallback_document_id=str(
+            payload.get("document_id") or payload.get("doc_id") or payload.get("source_id") or ""
+        )
+        or None,
     )
 
 
@@ -574,7 +1034,7 @@ def _build_session_context_store(
                 details={"backend": "redis", "truth_boundary": "short_term_session", "supports_load_any": True},
             ),
         )
-    if not settings.allow_in_memory_fallback:
+    if not _memory_fallback_allowed(settings):
         raise RuntimeError("Redis session context store is unavailable and in-memory fallback is disabled")
     return (
         InMemorySessionContextStore(),
@@ -598,7 +1058,7 @@ def _build_mastery_store(settings: Settings, repositories: RepositoryBundle) -> 
                 details={"backend": "postgres", "truth_boundary": "durable_fact"},
             ),
         )
-    if not settings.allow_in_memory_fallback:
+    if not _memory_fallback_allowed(settings):
         raise RuntimeError("Postgres topic mastery store is unavailable and in-memory fallback is disabled")
     return (
         InMemoryTopicMasteryStore(),
@@ -622,7 +1082,7 @@ def _build_async_log_store(settings: Settings, repositories: RepositoryBundle) -
                 details={"backend": "postgres_outbox", "path": "outbox", "payload_shape": "typed_or_legacy_mapping"},
             ),
         )
-    if not settings.allow_in_memory_fallback:
+    if not _memory_fallback_allowed(settings):
         raise RuntimeError("Outbox async log store is unavailable and in-memory fallback is disabled")
     return (
         InMemoryAsyncLogStore(),
@@ -685,11 +1145,48 @@ def _build_learning_plan_store(
     )
 
 
+def _build_durable_memory_backend(
+    settings: Settings,
+    infra: InfrastructureClients,
+) -> tuple[object, object, AdapterStatus, AdapterStatus] | None:
+    if not (settings.prefer_real_adapters and infra.postgres is not None and infra.qdrant is not None):
+        return None
+    repository = LongTermMemoryRepository(infra.postgres.session_factory)
+    index = QdrantLongTermMemoryIndex(infra.qdrant.client, infra.qdrant.user_memory_collection)
+    long_term_store = DurableLongTermMemoryStore(repository=repository, index=index)
+    semantic_store = DurableSemanticMemoryStore(long_term_store=long_term_store)
+    long_term_status = AdapterStatus(
+        name="long_term_memory_store",
+        mode="real",
+        ready=True,
+        details={
+            "backend": "postgres+qdrant",
+            "truth_boundary": "durable_memory",
+        },
+    )
+    semantic_status = AdapterStatus(
+        name="semantic_memory_store",
+        mode="real",
+        ready=True,
+        details={
+            "backend": "postgres+qdrant",
+            "requested_backend": "postgres+qdrant",
+            "reason": "durable_semantic_memory_backend_integrated",
+        },
+    )
+    return long_term_store, semantic_store, long_term_status, semantic_status
+
+
 def _build_semantic_memory_store(
     settings: Settings,
     infra: InfrastructureClients,
-) -> tuple[NoOpSemanticMemoryStore, AdapterStatus]:
-    requested_backend = "qdrant" if settings.prefer_real_adapters and infra.qdrant is not None else "none"
+) -> tuple[object, AdapterStatus]:
+    if settings.prefer_real_adapters and infra.qdrant is not None:
+        requested_backend = "qdrant"
+    else:
+        requested_backend = "none"
+    if not _memory_fallback_allowed(settings):
+        raise RuntimeError("Semantic memory store is unavailable and fallback is disabled")
     return (
         NoOpSemanticMemoryStore(),
         AdapterStatus(
@@ -699,8 +1196,25 @@ def _build_semantic_memory_store(
             details={
                 "backend": "noop",
                 "requested_backend": requested_backend,
-                "reason": "explicit_noop_adapter_until_real_semantic_memory_backend_is_integrated",
+                "reason": "fallback_allowed_or_explicit_dev_noop",
             },
+        ),
+    )
+
+
+def _build_long_term_memory_store(
+    settings: Settings,
+    infra: InfrastructureClients,
+) -> tuple[object, AdapterStatus]:
+    if not _memory_fallback_allowed(settings):
+        raise RuntimeError("Long-term memory store is unavailable and in-memory fallback is disabled")
+    return (
+        InMemoryLongTermMemoryStore(),
+        AdapterStatus(
+            name="long_term_memory_store",
+            mode="fallback",
+            ready=True,
+            details={"backend": "in_memory", "reason": "postgres_qdrant_unavailable_or_disabled"},
         ),
     )
 

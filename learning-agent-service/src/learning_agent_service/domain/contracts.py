@@ -1,10 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .memory import (
+    MemoryCandidate,
+    MemoryInjectionPlan,
+    MemoryTrace,
+    MemoryRecord,
+    MemoryRetrievalPlan,
+    MemoryUpdateEvent,
+    MemoryWritePlan,
+    RetrievedMemoryPack,
+)
 from .enums import IntentType, OutputStyle, RagStatus, ToolExecutionStatus, TurnDecision
 from .errors import ErrorInfo, TerminalEvent, WorkflowErrorCode
 
@@ -75,6 +85,10 @@ class EvidenceItem(CoreModel):
     score: float = 0.0
     document_id: Optional[str] = None
     chunk_type: Optional[str] = None
+    tier: str = "strong"
+    citation_chunk_id: Optional[str] = None
+    source_chunk_id: Optional[str] = None
+    parent_chunk_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -82,6 +96,9 @@ class EvidencePack(CoreModel):
     items: List[EvidenceItem] = Field(default_factory=list)
     discard_summary: Dict[str, Any] = Field(default_factory=dict)
     top_scores: List[float] = Field(default_factory=list)
+    evidence_status: str = "EMPTY"
+    strong_items: List[EvidenceItem] = Field(default_factory=list)
+    weak_items: List[EvidenceItem] = Field(default_factory=list)
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -110,6 +127,7 @@ class RagResult(CoreModel):
     status: RagStatus = RagStatus.EMPTY
     evidence_pack: Optional[EvidencePack] = None
     citations: List[Citation] = Field(default_factory=list)
+    evidence_status: str = "EMPTY"
     retrieval_strategy: str = "dense+sparse+metadata->rrf->rerank->evidence"
     metrics: Dict[str, Any] = Field(default_factory=dict)
     extra: Dict[str, Any] = Field(default_factory=dict)
@@ -120,6 +138,33 @@ class AnswerPlan(CoreModel):
     lead: Optional[str] = None
     ending_prompt: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanStep(CoreModel):
+    step_id: str = ""
+    goal: str = ""
+    expected_output: Optional[str] = None
+    allowed_tools: List[str] = Field(default_factory=list)
+    risk_level: Literal["low", "medium", "high"] = "low"
+    requires_approval: bool = False
+
+
+class StepResult(CoreModel):
+    step_id: str = ""
+    status: Literal["success", "failed", "skipped", "need_approval"] = "skipped"
+    tools_used: List[str] = Field(default_factory=list)
+    observations: List[str] = Field(default_factory=list)
+    result: Dict[str, Any] | str | None = None
+    error: Optional[str] = None
+    next_action: Optional[str] = None
+
+
+class PlanExecutionSummary(CoreModel):
+    status: Literal["completed", "partial", "failed", "need_approval"] = "partial"
+    completed_steps: int = 0
+    total_steps: int = 0
+    key_findings: List[str] = Field(default_factory=list)
+    final_decision: Optional[str] = None
 
 
 class ToolSelection(CoreModel):
@@ -181,6 +226,7 @@ class QueryRewriteRequest(CoreModel):
     reference_resolution: Optional[ReferenceResolutionResult] = None
     current_topic: Optional[str] = None
     topic_hint: Optional[str] = None
+    intent_confidence: float = 0.0
     user_preferences: Dict[str, Any] = Field(default_factory=dict)
     base_filters: Dict[str, Any] = Field(default_factory=dict)
 
@@ -255,12 +301,53 @@ class MemoryUpdateSummary(CoreModel):
     weak_topics: List[str] = Field(default_factory=list)
     topic_mastery: Dict[str, Any] = Field(default_factory=dict)
     semantic_memory: Dict[str, Any] = Field(default_factory=dict)
+    open_questions: List[str] = Field(default_factory=list)
+    confirmed_facts: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
+    summary_version: int = 0
+    summary_updated_at: Optional[datetime] = None
+    memory_trace_id: Optional[str] = None
+    write_status: str = "success"
+    write_targets: List[str] = Field(default_factory=list)
+    decision_reasons: List[str] = Field(default_factory=list)
+    degraded_parts: List[str] = Field(default_factory=list)
+    retryable_failures: List[str] = Field(default_factory=list)
+    permanent_failures: List[str] = Field(default_factory=list)
+    memory_write: Optional["MemoryWriteResult"] = None
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryWriteTargetResult(CoreModel):
+    target: str
+    status: Literal["success", "degraded", "retryable_failure", "permanent_failure", "skipped"] = "success"
+    reason: Optional[str] = None
+    retryable: bool = False
+    error: Optional[str] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryWriteResult(CoreModel):
+    trace_id: str = ""
+    idempotency_key: str = ""
+    session_id: str = ""
+    turn_id: str = ""
+    user_id: str = ""
+    operation: str = ""
+    status: Literal["success", "partial_success", "degraded", "pending_compensation", "permanent_failure"] = "success"
+    write_targets: List[str] = Field(default_factory=list)
+    target_results: List[MemoryWriteTargetResult] = Field(default_factory=list)
+    decision_reasons: List[str] = Field(default_factory=list)
+    degraded_parts: List[str] = Field(default_factory=list)
+    retryable_failures: List[str] = Field(default_factory=list)
+    permanent_failures: List[str] = Field(default_factory=list)
+    compensation_required: bool = False
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PersistSessionResult(CoreModel):
     updated_context: "PersistentSessionContext"
     memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
+    memory_write: Optional[MemoryWriteResult] = None
 
 
 class MasteryUpdateCommand(CoreModel):
@@ -284,6 +371,7 @@ class MasteryUpdateResult(CoreModel):
     topic_mastery: Dict[str, Any] = Field(default_factory=dict)
     semantic_index: Dict[str, Any] = Field(default_factory=dict)
     metrics_patch: Dict[str, Any] = Field(default_factory=dict)
+    memory_write: Optional[MemoryWriteResult] = None
 
 
 class RecommendationResult(CoreModel):
@@ -303,12 +391,46 @@ class RecommendationQuery(CoreModel):
     learning_mode: bool = False
 
 
+class RetrievalSummary(CoreModel):
+    semantic_query: Optional[str] = None
+    keyword_query: Optional[str] = None
+    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
+    retrieval_strategy: Optional[str] = None
+    retrieval_hit_count: int = 0
+    evidence_used_count: int = 0
+    evidence_status: str = "EMPTY"
+    evidence_strong_count: int = 0
+    evidence_weak_count: int = 0
+
+
+class MemoryUsedItemSummary(CoreModel):
+    memory_id: str = ""
+    memory_type: Optional[str] = None
+    scope: Optional[str] = None
+    summary: Optional[str] = None
+    source: Optional[str] = None
+    confidence: float = 0.0
+
+
+class MemoryUsedSummary(CoreModel):
+    used: bool = False
+    total_memories: int = 0
+    retrieval_reason: Optional[str] = None
+    total_token_estimate: int = 0
+    prompt_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
+    state_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
+    tool_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
+    rag_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
+
+
 class AnswerComposeRequest(CoreModel):
     raw_query: str
     requested_output_style: Optional[OutputStyle] = None
     rag_result: Optional[RagResult] = None
     tool_result: Optional[NormalizedToolResult] = None
     recommendation: Optional[RecommendationResult] = None
+    plan_summary: Optional[PlanExecutionSummary] = None
+    memory_injection_plan: Optional[MemoryInjectionPlan] = None
 
 
 class AnswerComposeResult(CoreModel):
@@ -325,6 +447,11 @@ class PersistentSessionContext(CoreModel):
     active_plan_id: Optional[str] = None
     learning_mode: bool = False
     history_summary: Optional[str] = None
+    open_questions: List[str] = Field(default_factory=list)
+    confirmed_facts: List[str] = Field(default_factory=list)
+    next_steps: List[str] = Field(default_factory=list)
+    summary_version: int = 0
+    summary_updated_at: Optional[datetime] = None
     pending_clarification: Optional[ClarificationCard] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
@@ -335,6 +462,9 @@ class TurnRuntimeState(CoreModel):
     intent: Optional[IntentType] = None
     intent_confidence: float = 0.0
     requested_output_style: Optional[OutputStyle] = None
+    task_complexity: Literal["simple", "complex"] = "simple"
+    execution_mode: Literal["auto", "simple", "plan_execute"] = "auto"
+    risk_level: Literal["low", "medium", "high"] = "low"
     slots: Dict[str, Any] = Field(default_factory=dict)
     reference_resolution: Optional[ReferenceResolutionResult] = None
     clarification_card: Optional[ClarificationCard] = None
@@ -346,6 +476,21 @@ class TurnRuntimeState(CoreModel):
     tool_plan: Optional[ToolSelection] = None
     raw_tool_result: Optional[ToolExecutionResult] = None
     tool_result: Optional[NormalizedToolResult] = None
+    plan: List[PlanStep] = Field(default_factory=list)
+    current_step_index: int = 0
+    current_step: Optional[PlanStep] = None
+    step_results: List[StepResult] = Field(default_factory=list)
+    need_replan: bool = False
+    replan_reason: Optional[str] = None
+    need_human_approval: bool = False
+    approval_request: Dict[str, Any] = Field(default_factory=dict)
+    final_task_summary: Optional[PlanExecutionSummary] = None
+    sensory_memory: Dict[str, Any] = Field(default_factory=dict)
+    short_term_window: List[Dict[str, Any]] = Field(default_factory=list)
+    retrieved_memory_pack: Optional[RetrievedMemoryPack] = None
+    memory_candidates: List[MemoryCandidate] = Field(default_factory=list)
+    memory_write_plan: Optional[MemoryWritePlan] = None
+    memory_injection_plan: Optional[MemoryInjectionPlan] = None
     final_answer: Optional[str] = None
     rag_result: Optional[RagResult] = None
     recommendation: Optional[RecommendationResult] = None
@@ -369,6 +514,7 @@ class GraphRuntimeMeta(CoreModel):
     terminal_event: Optional[TerminalEvent] = None
     emitted_events: List[SseEnvelope] = Field(default_factory=list)
     memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
+    memory_trace: Optional[MemoryTrace] = None
     session_persisted: bool = False
     extra: Dict[str, Any] = Field(default_factory=dict)
 
@@ -379,6 +525,9 @@ class FinalPayload(CoreModel):
     used_tools: List[str] = Field(default_factory=list)
     resolved_topic: Optional[str] = None
     retrieval_strategy: Optional[str] = None
+    grounding_status: Literal["grounded", "weakly_grounded", "not_grounded"] = "not_grounded"
+    retrieval_summary: Optional[RetrievalSummary] = None
+    memory_used_summary: Optional[MemoryUsedSummary] = None
     memory_updates: Dict[str, Any] = Field(default_factory=dict)
     recommendation: Optional[Dict[str, Any]] = None
     confidence: float = 0.0
@@ -409,3 +558,7 @@ class SseEnvelope(CoreModel):
 GraphRuntimeMeta.model_rebuild()
 TurnUnderstandingRequest.model_rebuild()
 PersistSessionResult.model_rebuild()
+MasteryUpdateResult.model_rebuild()
+MemoryUpdateSummary.model_rebuild()
+MemoryWriteTargetResult.model_rebuild()
+MemoryWriteResult.model_rebuild()

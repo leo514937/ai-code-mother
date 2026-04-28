@@ -104,13 +104,31 @@ const handleDelete = () => {
 
 .info-label {
   width: 80px;
-  color: #666;
+  color: var(--text-secondary);
   font-size: 14px;
   flex-shrink: 0;
 }
 
 .app-actions {
   padding-top: 16px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border-color);
+}
+
+:deep(.ant-modal-content) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+:deep(.ant-modal-header) {
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--border-color);
+}
+
+:deep(.ant-modal-title) {
+  color: var(--text-primary);
+}
+
+:deep(.ant-modal-body) {
+  color: var(--text-primary);
 }
 </style>

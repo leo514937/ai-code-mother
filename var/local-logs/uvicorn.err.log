@@ -1,0 +1,10 @@
+INFO:     Will watch for changes in these directories: ['D:\\javacode\\ai-code-mother\\learning-agent-service']
+INFO:     Uvicorn running on http://127.0.0.1:9000 (Press CTRL+C to quit)
+INFO:     Started reloader process [12316] using WatchFiles
+D:\javacode\ai-code-mother\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:38: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+{"ts": "2026-04-28T14:15:17.293019+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: POST http://localhost:6333/collections/knowledge_chunks/points/scroll \"HTTP/1.1 404 Not Found\""}
+INFO:     Started server process [18428]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+{"ts": "2026-04-28T14:15:18.832852+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:6333 \"HTTP/1.1 200 OK\""}

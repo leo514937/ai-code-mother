@@ -5,6 +5,8 @@ import cn.hutool.json.JSONUtil;
 import com.yupi.yuaicodemother.agent.client.PythonAgentClient;
 import com.yupi.yuaicodemother.agent.client.dto.PythonChatStreamRequest;
 import com.yupi.yuaicodemother.agent.client.dto.PythonSseEnvelope;
+import com.yupi.yuaicodemother.agent.model.dto.AgentFeedbackRequest;
+import com.yupi.yuaicodemother.agent.model.dto.AgentMemoryActionRequest;
 import com.yupi.yuaicodemother.agent.convert.PythonAgentEventConverter;
 import com.yupi.yuaicodemother.agent.exception.PythonAgentInvokeException;
 import com.yupi.yuaicodemother.agent.exception.PythonAgentProtocolException;
@@ -110,6 +112,111 @@ public class AgentGatewayServiceImpl implements AgentGatewayService {
                 ));
     }
 
+    @Override
+    public Map<String, Object> reportFeedback(AgentThread thread, User loginUser, AgentFeedbackRequest request) {
+        ThrowUtils.throwIf(thread == null, ErrorCode.PARAMS_ERROR, "Thread cannot be null");
+        ThrowUtils.throwIf(request == null, ErrorCode.PARAMS_ERROR, "Feedback request cannot be null");
+        return pythonAgentClient.postInternalJson("/internal/v1/feedback/report", buildFeedbackPayload(thread, loginUser, request));
+    }
+
+    @Override
+    public Map<String, Object> listMemoryRecords(AgentThread thread, User loginUser, String scope, String query, int limit) {
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/records",
+                buildMemoryQuery(thread, loginUser, scope, query, limit)
+        );
+    }
+
+    @Override
+    public Map<String, Object> getMemoryRecord(AgentThread thread, User loginUser, String memoryId) {
+        ThrowUtils.throwIf(StrUtil.isBlank(memoryId), ErrorCode.PARAMS_ERROR, "Memory id cannot be blank");
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/records/" + memoryId,
+                buildThreadQuery(thread, loginUser)
+        );
+    }
+
+    @Override
+    public Map<String, Object> listMemoryCandidates(AgentThread thread, User loginUser, int limit) {
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/candidates",
+                buildMemoryQuery(thread, loginUser, null, null, limit)
+        );
+    }
+
+    @Override
+    public Map<String, Object> listMemoryTraces(AgentThread thread, User loginUser, String sessionId, String turnId, int limit) {
+        Map<String, Object> query = buildThreadQuery(thread, loginUser);
+        query.put("session_id", StrUtil.blankToDefault(sessionId, thread.getPythonSessionId()));
+        if (StrUtil.isNotBlank(turnId)) {
+            query.put("turn_id", turnId);
+        }
+        query.put("limit", limit);
+        return pythonAgentClient.getInternalJson("/internal/v1/memory/traces", query);
+    }
+
+    @Override
+    public Map<String, Object> getMemoryTrace(AgentThread thread, User loginUser, String traceId) {
+        ThrowUtils.throwIf(StrUtil.isBlank(traceId), ErrorCode.PARAMS_ERROR, "Trace id cannot be blank");
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/traces/" + traceId,
+                buildThreadQuery(thread, loginUser)
+        );
+    }
+
+    @Override
+    public Map<String, Object> listMemoryAccessLogs(AgentThread thread, User loginUser, String memoryId) {
+        ThrowUtils.throwIf(StrUtil.isBlank(memoryId), ErrorCode.PARAMS_ERROR, "Memory id cannot be blank");
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/records/" + memoryId + "/access-logs",
+                buildThreadQuery(thread, loginUser)
+        );
+    }
+
+    @Override
+    public Map<String, Object> listMemoryDeletionJobs(AgentThread thread, User loginUser, int limit) {
+        return pythonAgentClient.getInternalJson(
+                "/internal/v1/memory/deletion-jobs",
+                buildMemoryQuery(thread, loginUser, null, null, limit)
+        );
+    }
+
+    @Override
+    public Map<String, Object> confirmMemoryCandidate(AgentThread thread, User loginUser, String candidateId, AgentMemoryActionRequest request) {
+        ThrowUtils.throwIf(StrUtil.isBlank(candidateId), ErrorCode.PARAMS_ERROR, "Candidate id cannot be blank");
+        return pythonAgentClient.postInternalJson(
+                "/internal/v1/memory/candidates/" + candidateId + "/confirm",
+                buildMemoryActionPayload(thread, loginUser, request)
+        );
+    }
+
+    @Override
+    public Map<String, Object> rejectMemoryCandidate(AgentThread thread, User loginUser, String candidateId, AgentMemoryActionRequest request) {
+        ThrowUtils.throwIf(StrUtil.isBlank(candidateId), ErrorCode.PARAMS_ERROR, "Candidate id cannot be blank");
+        return pythonAgentClient.postInternalJson(
+                "/internal/v1/memory/candidates/" + candidateId + "/reject",
+                buildMemoryActionPayload(thread, loginUser, request)
+        );
+    }
+
+    @Override
+    public Map<String, Object> supersedeMemoryRecord(AgentThread thread, User loginUser, String memoryId, AgentMemoryActionRequest request) {
+        ThrowUtils.throwIf(StrUtil.isBlank(memoryId), ErrorCode.PARAMS_ERROR, "Memory id cannot be blank");
+        return pythonAgentClient.postInternalJson(
+                "/internal/v1/memory/records/" + memoryId + "/supersede",
+                buildMemoryActionPayload(thread, loginUser, request)
+        );
+    }
+
+    @Override
+    public Map<String, Object> deleteMemoryRecord(AgentThread thread, User loginUser, String memoryId, AgentMemoryActionRequest request) {
+        ThrowUtils.throwIf(StrUtil.isBlank(memoryId), ErrorCode.PARAMS_ERROR, "Memory id cannot be blank");
+        return pythonAgentClient.postInternalJson(
+                "/internal/v1/memory/records/" + memoryId + "/delete",
+                buildMemoryActionPayload(thread, loginUser, request)
+        );
+    }
+
     private AgentSseEventVO handlePythonEnvelope(
             AgentThread thread,
             PythonSseEnvelope envelope,
@@ -211,6 +318,66 @@ public class AgentGatewayServiceImpl implements AgentGatewayService {
         audit.setLatencyMs(Duration.between(startTime, Instant.now()).toMillis());
         audit.setMetricsJson(metricsPayload == null ? null : JSONUtil.toJsonStr(metricsPayload));
         agentTurnAuditMapper.update(audit);
+    }
+
+    private Map<String, Object> buildThreadQuery(AgentThread thread, User loginUser) {
+        Map<String, Object> query = new LinkedHashMap<>();
+        query.put("user_id", String.valueOf(loginUser.getId()));
+        query.put("thread_id", String.valueOf(thread.getId()));
+        query.put("session_id", thread.getPythonSessionId());
+        return query;
+    }
+
+    private Map<String, Object> buildMemoryQuery(AgentThread thread, User loginUser, String scope, String queryText, int limit) {
+        Map<String, Object> query = buildThreadQuery(thread, loginUser);
+        if (StrUtil.isNotBlank(scope)) {
+            query.put("scope", scope);
+        }
+        if (StrUtil.isNotBlank(queryText)) {
+            query.put("query", queryText);
+        }
+        query.put("limit", limit);
+        return query;
+    }
+
+    private Map<String, Object> buildMemoryActionPayload(AgentThread thread, User loginUser, AgentMemoryActionRequest request) {
+        Map<String, Object> payload = buildThreadQuery(thread, loginUser);
+        if (request == null) {
+            return payload;
+        }
+        if (StrUtil.isNotBlank(request.getReason())) {
+            payload.put("reason", request.getReason());
+        }
+        if (StrUtil.isNotBlank(request.getSupersededBy())) {
+            payload.put("superseded_by", request.getSupersededBy());
+        }
+        if (StrUtil.isNotBlank(request.getTargetMemoryId())) {
+            payload.put("target_memory_id", request.getTargetMemoryId());
+        }
+        return payload;
+    }
+
+    private Map<String, Object> buildFeedbackPayload(AgentThread thread, User loginUser, AgentFeedbackRequest request) {
+        Map<String, Object> payload = buildThreadQuery(thread, loginUser);
+        if (request.getTurnId() != null) {
+            payload.put("turn_id", request.getTurnId());
+        }
+        if (request.getTraceId() != null) {
+            payload.put("trace_id", request.getTraceId());
+        }
+        if (request.getIssueType() != null) {
+            payload.put("issue_type", request.getIssueType());
+        }
+        payload.put("is_helpful", request.getIsHelpful());
+        if (request.getComment() != null) {
+            payload.put("comment", request.getComment());
+        }
+        payload.put("final_payload", request.getFinalPayload());
+        payload.put("timeline", request.getTimeline());
+        payload.put("retrieval_summary", request.getRetrievalSummary());
+        payload.put("memory_used_summary", request.getMemoryUsedSummary());
+        payload.put("context", request.getContext());
+        return payload;
     }
 
     private Map<String, Object> buildClientContext(AgentThread thread) {

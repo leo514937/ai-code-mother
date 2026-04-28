@@ -48,7 +48,7 @@ class KnowledgeSearchFacade:
             )
         )
         recall = self._retriever.retrieve(plan)
-        evidence = self._evidence.evaluate(plan, recall.hits)
+        evidence = self._evidence.evaluate(plan, recall.hits, trace=recall.debug_trace)
         citations = self._citation_builder.build(evidence)
         citation_map = {citation.chunk_id: citation for citation in citations}
         matches = tuple(
@@ -76,6 +76,11 @@ class KnowledgeSearchFacade:
             citations=tuple(citations),
             matches=matches,
             metrics=metrics,
+            extra={
+                "retrieval_debug": recall.debug_trace.to_dict() if recall.debug_trace is not None else None,
+                "evidence_debug": evidence.debug_trace.to_dict() if evidence.debug_trace is not None else None,
+                "rejected_items": [item.to_dict() for item in evidence.rejected_items],
+            },
         )
 
     @staticmethod

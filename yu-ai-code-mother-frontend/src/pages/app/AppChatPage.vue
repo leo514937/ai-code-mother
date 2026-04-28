@@ -113,6 +113,11 @@
           <div class="input-wrapper">
             <a-tooltip v-if="!isOwner" title="无法在别人的作品下对话哦~" placement="top">
               <a-textarea
+                  name="app-chat-input"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  spellcheck="false"
                   v-model:value="userInput"
                   :placeholder="getInputPlaceholder()"
                   :rows="4"
@@ -123,6 +128,11 @@
             </a-tooltip>
             <a-textarea
                 v-else
+                name="app-chat-input"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                spellcheck="false"
                 v-model:value="userInput"
                 :placeholder="getInputPlaceholder()"
                 :rows="4"
@@ -242,11 +252,10 @@ import {
 const route = useRoute()
 const router = useRouter()
 const loginUserStore = useLoginUserStore()
-const showAgentSidebar = ref(true)
 
 // 应用信息
 const appInfo = ref<API.AppVO>()
-const appId = ref<any>()
+const appId = ref<string>()
 
 // 对话相关
 interface Message {
@@ -311,7 +320,7 @@ const loadChatHistory = async (isLoadMore = false) => {
   loadingHistory.value = true
   try {
     const params: API.listAppChatHistoryParams = {
-      appId: appId.value,
+      appId: Number(appId.value),
       pageSize: 10,
     }
     // 如果是加载更多，传递最后一条消息的创建时间作为游标
@@ -754,14 +763,8 @@ const getInputPlaceholder = () => {
   return '请描述你想生成的网站，越详细效果越好哦'
 }
 
-const resolveAgentSidebarEnabled = async () => {
-  // 不强制依赖后端接口
-  showAgentSidebar.value = true
-}
-
 // 页面加载时获取应用信息
 onMounted(() => {
-  void resolveAgentSidebarEnabled()
   fetchAppInfo()
 
   // 监听 iframe 消息
@@ -782,7 +785,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   padding: 16px;
-  background: #fdfdfd;
+  background: var(--app-bg);
+  color: var(--text-primary);
 }
 
 /* 顶部栏 */
@@ -807,7 +811,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--text-primary);
 }
 
 .header-right {
@@ -829,9 +833,10 @@ onUnmounted(() => {
   flex: 2;
   display: flex;
   flex-direction: column;
-  background: white;
+  background: var(--surface-elevated);
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 32px var(--shadow-color);
+  border: 1px solid var(--border-color);
   overflow: hidden;
 }
 
@@ -866,16 +871,16 @@ onUnmounted(() => {
   border-radius: 12px;
   line-height: 1.5;
   word-wrap: break-word;
+  color: var(--text-primary);
+  background: var(--surface-muted);
 }
 
 .user-message .message-content {
-  background: #1890ff;
-  color: white;
+  background: rgb(var(--brand-primary-rgb));
+  color: var(--text-inverse);
 }
 
 .ai-message .message-content {
-  background: #f5f5f5;
-  color: #1a1a1a;
   padding: 8px 12px;
 }
 
@@ -887,7 +892,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 /* 加载更多按钮 */
@@ -900,11 +905,21 @@ onUnmounted(() => {
 /* 输入区域 */
 .input-container {
   padding: 16px;
-  background: white;
+  background: var(--surface-elevated);
+  border-top: 1px solid var(--border-color);
 }
 
 .input-wrapper {
   position: relative;
+}
+
+.input-wrapper :deep(textarea) {
+  color: var(--text-primary);
+  background: transparent;
+}
+
+.input-wrapper :deep(textarea::placeholder) {
+  color: var(--text-tertiary);
 }
 
 .input-wrapper .ant-input {
@@ -922,9 +937,10 @@ onUnmounted(() => {
   flex: 3;
   display: flex;
   flex-direction: column;
-  background: white;
+  background: var(--surface-elevated);
   border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 32px var(--shadow-color);
+  border: 1px solid var(--border-color);
   overflow: hidden;
 }
 
@@ -941,13 +957,14 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .preview-header h3 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .preview-actions {
@@ -967,7 +984,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .placeholder-icon {
@@ -981,7 +998,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .preview-loading p {
@@ -996,6 +1013,19 @@ onUnmounted(() => {
 
 .selected-element-alert {
   margin: 0 16px;
+}
+
+.selected-element-alert :deep(.ant-alert-info) {
+  background: var(--surface-muted);
+  border-color: var(--border-color);
+}
+
+.selected-element-alert :deep(.ant-alert-message) {
+  color: var(--text-primary);
+}
+
+.selected-element-alert :deep(.ant-alert-description) {
+  color: var(--text-secondary);
 }
 
 /* 响应式设计 */
@@ -1043,6 +1073,7 @@ onUnmounted(() => {
 
   .selected-element-info {
     line-height: 1.4;
+    color: var(--text-primary);
   }
 
   .element-header {
@@ -1066,39 +1097,39 @@ onUnmounted(() => {
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 14px;
     font-weight: 600;
-    color: #007bff;
+    color: rgb(var(--brand-primary-rgb));
   }
 
   .element-id {
-    color: #28a745;
+    color: rgb(var(--brand-accent-rgb));
     margin-left: 4px;
   }
 
   .element-class {
-    color: #ffc107;
+    color: rgb(var(--brand-secondary-rgb));
     margin-left: 4px;
   }
 
   .element-selector-code {
     font-family: 'Monaco', 'Menlo', monospace;
-    background: #f6f8fa;
+    background: var(--surface-muted);
     padding: 2px 4px;
     border-radius: 3px;
     font-size: 12px;
-    color: #d73a49;
-    border: 1px solid #e1e4e8;
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
   }
 
   /* 编辑模式按钮样式 */
   .edit-mode-active {
-    background-color: #52c41a !important;
-    border-color: #52c41a !important;
-    color: white !important;
+    background-color: rgb(var(--brand-accent-rgb)) !important;
+    border-color: rgb(var(--brand-accent-rgb)) !important;
+    color: var(--text-inverse) !important;
   }
 
   .edit-mode-active:hover {
-    background-color: #73d13d !important;
-    border-color: #73d13d !important;
+    background-color: rgba(var(--brand-accent-rgb), 0.88) !important;
+    border-color: rgba(var(--brand-accent-rgb), 0.88) !important;
   }
 }
 </style>

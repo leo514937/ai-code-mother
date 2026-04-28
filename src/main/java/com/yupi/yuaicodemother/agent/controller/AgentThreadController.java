@@ -4,6 +4,8 @@ import cn.hutool.core.bean.BeanUtil;
 import com.yupi.yuaicodemother.agent.config.AgentFeatureProperties;
 import com.yupi.yuaicodemother.agent.convert.PythonAgentEventConverter;
 import com.yupi.yuaicodemother.agent.model.dto.AgentMessageStreamRequest;
+import com.yupi.yuaicodemother.agent.model.dto.AgentFeedbackRequest;
+import com.yupi.yuaicodemother.agent.model.dto.AgentMemoryActionRequest;
 import com.yupi.yuaicodemother.agent.model.dto.AgentThreadCreateRequest;
 import com.yupi.yuaicodemother.agent.model.entity.AgentThread;
 import com.yupi.yuaicodemother.agent.model.enums.AgentEventTypeEnum;
@@ -36,6 +38,7 @@ import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/agent")
@@ -98,6 +101,134 @@ public class AgentThreadController {
         ensureSidebarEnabled();
         User loginUser = userService.getLoginUser(request);
         return ResultUtils.success(agentThreadService.archiveThread(threadId, loginUser));
+    }
+
+    @PostMapping("/threads/{threadId}/feedback")
+    public BaseResponse<Map<String, Object>> reportFeedback(@PathVariable Long threadId,
+                                                            @RequestBody AgentFeedbackRequest feedbackRequest,
+                                                            HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.reportFeedback(thread, loginUser, feedbackRequest));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/records")
+    public BaseResponse<Map<String, Object>> listMemoryRecords(@PathVariable Long threadId,
+                                                               @RequestParam(required = false) String scope,
+                                                               @RequestParam(required = false) String query,
+                                                               @RequestParam(defaultValue = "50") int limit,
+                                                               HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.listMemoryRecords(thread, loginUser, scope, query, limit));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/records/{memoryId}")
+    public BaseResponse<Map<String, Object>> getMemoryRecord(@PathVariable Long threadId,
+                                                             @PathVariable String memoryId,
+                                                             HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.getMemoryRecord(thread, loginUser, memoryId));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/candidates")
+    public BaseResponse<Map<String, Object>> listMemoryCandidates(@PathVariable Long threadId,
+                                                                  @RequestParam(defaultValue = "50") int limit,
+                                                                  HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.listMemoryCandidates(thread, loginUser, limit));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/traces")
+    public BaseResponse<Map<String, Object>> listMemoryTraces(@PathVariable Long threadId,
+                                                              @RequestParam(required = false) String sessionId,
+                                                              @RequestParam(required = false) String turnId,
+                                                              @RequestParam(defaultValue = "20") int limit,
+                                                              HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.listMemoryTraces(thread, loginUser, sessionId, turnId, limit));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/traces/{traceId}")
+    public BaseResponse<Map<String, Object>> getMemoryTrace(@PathVariable Long threadId,
+                                                            @PathVariable String traceId,
+                                                            HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.getMemoryTrace(thread, loginUser, traceId));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/records/{memoryId}/access-logs")
+    public BaseResponse<Map<String, Object>> listMemoryAccessLogs(@PathVariable Long threadId,
+                                                                   @PathVariable String memoryId,
+                                                                   HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.listMemoryAccessLogs(thread, loginUser, memoryId));
+    }
+
+    @GetMapping("/threads/{threadId}/memory/deletion-jobs")
+    public BaseResponse<Map<String, Object>> listMemoryDeletionJobs(@PathVariable Long threadId,
+                                                                    @RequestParam(defaultValue = "50") int limit,
+                                                                    HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.listMemoryDeletionJobs(thread, loginUser, limit));
+    }
+
+    @PostMapping("/threads/{threadId}/memory/candidates/{candidateId}/confirm")
+    public BaseResponse<Map<String, Object>> confirmMemoryCandidate(@PathVariable Long threadId,
+                                                                    @PathVariable String candidateId,
+                                                                    @RequestBody(required = false) AgentMemoryActionRequest actionRequest,
+                                                                    HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.confirmMemoryCandidate(thread, loginUser, candidateId, actionRequest));
+    }
+
+    @PostMapping("/threads/{threadId}/memory/candidates/{candidateId}/reject")
+    public BaseResponse<Map<String, Object>> rejectMemoryCandidate(@PathVariable Long threadId,
+                                                                   @PathVariable String candidateId,
+                                                                   @RequestBody(required = false) AgentMemoryActionRequest actionRequest,
+                                                                   HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.rejectMemoryCandidate(thread, loginUser, candidateId, actionRequest));
+    }
+
+    @PostMapping("/threads/{threadId}/memory/records/{memoryId}/supersede")
+    public BaseResponse<Map<String, Object>> supersedeMemoryRecord(@PathVariable Long threadId,
+                                                                   @PathVariable String memoryId,
+                                                                   @RequestBody(required = false) AgentMemoryActionRequest actionRequest,
+                                                                   HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.supersedeMemoryRecord(thread, loginUser, memoryId, actionRequest));
+    }
+
+    @PostMapping("/threads/{threadId}/memory/records/{memoryId}/delete")
+    public BaseResponse<Map<String, Object>> deleteMemoryRecord(@PathVariable Long threadId,
+                                                                @PathVariable String memoryId,
+                                                                @RequestBody(required = false) AgentMemoryActionRequest actionRequest,
+                                                                HttpServletRequest request) {
+        ensureSidebarEnabled();
+        User loginUser = userService.getLoginUser(request);
+        AgentThread thread = agentThreadService.getOwnedThread(threadId, loginUser);
+        return ResultUtils.success(agentGatewayService.deleteMemoryRecord(thread, loginUser, memoryId, actionRequest));
     }
 
     @PostMapping(value = "/threads/{threadId}/messages/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

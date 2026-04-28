@@ -6,6 +6,7 @@
       :loading="loadingThreads"
       :creating="creatingThread"
       :archiving-thread-id="archivingThreadId"
+      :can-create="canCreateThread"
       @create="handleCreateThread"
       @select="handleSelectThread"
       @archive="handleArchiveThread"
@@ -25,11 +26,25 @@
       @select="handleQuickReply"
     />
 
-    <AgentEventTimeline :items="timeline" :busy="isStreaming" />
+    <AgentAnswerInsights
+      :final-payload="finalPayload"
+      :timeline="timeline"
+      :is-streaming="isStreaming"
+      :thread-id="activeThreadId"
+      :trace-id="traceId"
+      :turn-id="turnId"
+      :session-id="sessionId"
+      :workflow-version="workflowVersion"
+    />
 
     <div class="sidebar-composer">
       <a-alert v-if="sidebarError" type="error" show-icon :message="sidebarError" />
       <a-textarea
+        name="agent-sidebar-input"
+        autocomplete="off"
+        autocorrect="off"
+        autocapitalize="off"
+        spellcheck="false"
         v-model:value="draft"
         :auto-size="{ minRows: 3, maxRows: 5 }"
         :disabled="!appId || isStreaming"
@@ -46,9 +61,9 @@
 
 <script setup lang="ts">
 import { message } from 'ant-design-vue'
-import { ref, toRef, watch } from 'vue'
+import { computed, ref, toRef, watch } from 'vue'
+import AgentAnswerInsights from './AgentAnswerInsights.vue'
 import AgentClarificationCard from './AgentClarificationCard.vue'
-import AgentEventTimeline from './AgentEventTimeline.vue'
 import AgentMessagePane from './AgentMessagePane.vue'
 import AgentThreadList from './AgentThreadList.vue'
 import { useAgentStream } from '../composables/useAgentStream'
@@ -59,6 +74,14 @@ import { buildDisplayMessages, extractEventPrimaryText } from '../utils/agentEve
 const props = defineProps<{
   appId?: string | number
 }>()
+
+const canCreateThread = computed(() => {
+  if (props.appId === undefined || props.appId === null) {
+    return false
+  }
+  const normalized = String(props.appId).trim()
+  return /^\d+$/.test(normalized)
+})
 
 const draft = ref('')
 const displayMessages = ref<AgentDisplayMessage[]>([])
@@ -85,6 +108,11 @@ const {
   isStreaming,
   timeline,
   clarificationCard,
+  finalPayload,
+  traceId,
+  turnId,
+  sessionId,
+  workflowVersion,
   hydrateFromRecords,
   errorMessage,
   resetStreamState,
@@ -166,6 +194,9 @@ const handleCreateThread = async () => {
   try {
     sidebarError.value = ''
     stopStream()
+    if (!canCreateThread.value) {
+      throw new Error('请先进入某个应用的聊天页，再新建会话')
+    }
     await createThread()
   } catch (error) {
     const errorMessageText = error instanceof Error ? error.message : '新建会话失败'
@@ -280,8 +311,8 @@ const handleInputEnter = (event: KeyboardEvent) => {
   flex-direction: column;
   overflow: hidden;
   background:
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 28%),
-    linear-gradient(180deg, #ffffff, #f8fbff 52%, #ffffff);
+    radial-gradient(circle at top right, rgba(var(--brand-primary-rgb), 0.14), transparent 28%),
+    linear-gradient(180deg, var(--surface-elevated), var(--surface-bg) 52%, var(--surface-elevated));
 }
 
 .sidebar-composer {
@@ -289,8 +320,8 @@ const handleInputEnter = (event: KeyboardEvent) => {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  border-top: 1px solid #eef2f7;
-  background: #ffffff;
+  border-top: 1px solid var(--border-color);
+  background: var(--surface-elevated);
 }
 
 .composer-actions {

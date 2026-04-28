@@ -44,7 +44,7 @@ const loginUserStore = useLoginUserStore()
  * 提交表单
  * @param values
  */
-const handleSubmit = async (values: any) => {
+const handleSubmit = async (values: API.UserLoginRequest) => {
   const res = await userLogin(values)
   // 登录成功，把登录态保存到全局状态中
   if (res.data.code === 0 && res.data.data) {
@@ -62,10 +62,14 @@ const handleSubmit = async (values: any) => {
 
 <style scoped>
 #userLoginPage {
-  background: white;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   max-width: 720px;
   padding: 24px;
   margin: 24px auto;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 16px 40px var(--shadow-color);
 }
 
 .title {
@@ -75,14 +79,26 @@ const handleSubmit = async (values: any) => {
 
 .desc {
   text-align: center;
-  color: #bbb;
+  color: var(--text-secondary);
   margin-bottom: 16px;
 }
 
 .tips {
   text-align: right;
-  color: #bbb;
+  color: var(--text-secondary);
   font-size: 13px;
   margin-bottom: 16px;
+}
+
+#userLoginPage :deep(.ant-input),
+#userLoginPage :deep(.ant-input-affix-wrapper) {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+#userLoginPage :deep(.ant-input::placeholder),
+#userLoginPage :deep(.ant-input-affix-wrapper input::placeholder) {
+  color: var(--text-tertiary);
 }
 </style>

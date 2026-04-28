@@ -279,6 +279,7 @@ onMounted(() => {
   padding: 24px;
   max-width: 1000px;
   margin: 0 auto;
+  color: var(--text-primary);
 }
 
 .page-header {
@@ -292,6 +293,7 @@ onMounted(() => {
   margin: 0;
   font-size: 24px;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
 .edit-container {
@@ -301,23 +303,44 @@ onMounted(() => {
 .cover-preview {
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: #fafafa;
+  background: var(--surface-muted);
 }
 
 .form-tip {
   font-size: 12px;
-  color: #999;
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
 :deep(.ant-card-head) {
-  background: #fafafa;
+  background: var(--surface-muted);
 }
 
 :deep(.ant-descriptions-item-label) {
-  background: #fafafa;
+  background: var(--surface-muted);
   font-weight: 500;
+  color: var(--text-primary);
+}
+
+:deep(.ant-card) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+:deep(.ant-input),
+:deep(.ant-input-affix-wrapper),
+:deep(.ant-input-number),
+:deep(.ant-input-disabled),
+:deep(.ant-input[disabled]) {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+:deep(.ant-descriptions-item-content) {
+  color: var(--text-primary);
 }
 </style>

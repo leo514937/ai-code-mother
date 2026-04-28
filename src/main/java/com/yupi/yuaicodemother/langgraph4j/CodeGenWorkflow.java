@@ -105,7 +105,7 @@ public class CodeGenWorkflow {
      */
     public Flux<String> executeWorkflowWithFlux(String originalPrompt) {
         return Flux.create(sink -> {
-            Thread.startVirtualThread(() -> {
+            Thread workflowThread = new Thread(() -> {
                 try {
                     CompiledGraph<MessagesState<String>> workflow = createWorkflow();
                     WorkflowContext initialContext = WorkflowContext.builder()
@@ -147,6 +147,9 @@ public class CodeGenWorkflow {
                     sink.error(e);
                 }
             });
+            workflowThread.setName("codegen-workflow-" + System.currentTimeMillis());
+            workflowThread.setDaemon(true);
+            workflowThread.start();
         });
     }
 
@@ -168,7 +171,7 @@ public class CodeGenWorkflow {
      */
     public SseEmitter executeWorkflowWithSse(String originalPrompt) {
         SseEmitter emitter = new SseEmitter(30 * 60 * 1000L);
-        Thread.startVirtualThread(() -> {
+        Thread workflowThread = new Thread(() -> {
             try {
                 CompiledGraph<MessagesState<String>> workflow = createWorkflow();
                 WorkflowContext initialContext = WorkflowContext.builder()
@@ -210,6 +213,9 @@ public class CodeGenWorkflow {
                 emitter.completeWithError(e);
             }
         });
+        workflowThread.setName("codegen-workflow-sse-" + System.currentTimeMillis());
+        workflowThread.setDaemon(true);
+        workflowThread.start();
         return emitter;
     }
 

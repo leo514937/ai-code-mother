@@ -19,6 +19,14 @@ export const useAgentThreads = ({ appId }: UseAgentThreadsOptions) => {
     return threads.value.find((thread) => thread.id === activeThreadId.value)
   })
 
+  const normalizeAppId = (value: string | number | undefined) => {
+    if (value === undefined || value === null) {
+      return undefined
+    }
+    const normalized = String(value).trim()
+    return /^\d+$/.test(normalized) ? normalized : undefined
+  }
+
   const loadMessages = async (threadId?: string) => {
     if (!threadId) {
       messageRecords.value = []
@@ -38,7 +46,8 @@ export const useAgentThreads = ({ appId }: UseAgentThreadsOptions) => {
   }
 
   const refreshThreads = async (preferredThreadId?: string) => {
-    if (!appId.value) {
+    const resolvedAppId = normalizeAppId(appId.value)
+    if (!resolvedAppId) {
       threads.value = []
       activeThreadId.value = undefined
       messageRecords.value = []
@@ -47,7 +56,7 @@ export const useAgentThreads = ({ appId }: UseAgentThreadsOptions) => {
 
     loadingThreads.value = true
     try {
-      const nextThreads = await listAgentThreads(appId.value)
+      const nextThreads = await listAgentThreads(resolvedAppId)
       threads.value = nextThreads
 
       if (!nextThreads.length) {
@@ -68,13 +77,14 @@ export const useAgentThreads = ({ appId }: UseAgentThreadsOptions) => {
   }
 
   const createThread = async (title?: string) => {
-    if (!appId.value) {
-      throw new Error('Missing app context')
+    const resolvedAppId = normalizeAppId(appId.value)
+    if (!resolvedAppId) {
+      throw new Error('请先进入某个应用的聊天页，再新建会话')
     }
     creatingThread.value = true
     try {
       const thread = await createAgentThread({
-        appId: appId.value,
+        appId: resolvedAppId,
         title,
       })
       threads.value = [thread, ...threads.value.filter((item) => item.id !== thread.id)]
@@ -103,7 +113,8 @@ export const useAgentThreads = ({ appId }: UseAgentThreadsOptions) => {
   watch(
     appId,
     async (nextAppId) => {
-      if (!nextAppId) {
+      const resolvedAppId = normalizeAppId(nextAppId)
+      if (!resolvedAppId) {
         threads.value = []
         activeThreadId.value = undefined
         messageRecords.value = []

@@ -1,14 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from .canonical import CanonicalTopicResolver
 from .models import QuizTarget, Recommendation, RecommendationContext, TopicMasteryRecord
 
 
+@dataclass(frozen=True)
+class MemoryRecommendationPolicyConfig:
+    low_mastery_threshold: float = 0.45
+    review_priority_threshold: float = 60.0
+
+
 class RecommendationService:
-    def __init__(self, resolver: Optional[CanonicalTopicResolver] = None) -> None:
+    def __init__(
+        self,
+        resolver: Optional[CanonicalTopicResolver] = None,
+        config: Optional[MemoryRecommendationPolicyConfig] = None,
+    ) -> None:
         self._resolver = resolver or CanonicalTopicResolver()
+        self.config = config or MemoryRecommendationPolicyConfig()
 
     def recommend(self, context: RecommendationContext) -> Tuple[Recommendation, ...]:
         if not context.learning_mode:
@@ -87,7 +99,7 @@ class RecommendationService:
     def _derive_weak_topics(self, context: RecommendationContext) -> Tuple[str, ...]:
         topics = list(self._resolver.canonicalize_many(context.weak_topics))
         for record in context.mastery_records:
-            if record.mastery_score < 0.45 or record.review_priority >= 60.0:
+            if record.mastery_score < self.config.low_mastery_threshold or record.review_priority >= self.config.review_priority_threshold:
                 topics.append(record.topic)
         return self._resolver.canonicalize_many(topics)
 
@@ -111,8 +123,13 @@ class RecommendationService:
 
 
 class QuizTargetingService:
-    def __init__(self, resolver: Optional[CanonicalTopicResolver] = None) -> None:
+    def __init__(
+        self,
+        resolver: Optional[CanonicalTopicResolver] = None,
+        config: Optional[MemoryRecommendationPolicyConfig] = None,
+    ) -> None:
         self._resolver = resolver or CanonicalTopicResolver()
+        self.config = config or MemoryRecommendationPolicyConfig()
 
     def build_targets(self, context: RecommendationContext, limit: int = 5) -> Tuple[QuizTarget, ...]:
         targets: List[QuizTarget] = []
@@ -124,7 +141,7 @@ class QuizTargetingService:
             weak_topics = [
                 record.topic
                 for record in context.mastery_records
-                if record.review_priority >= 60.0 or record.mastery_score < 0.45
+                if record.review_priority >= self.config.review_priority_threshold or record.mastery_score < self.config.low_mastery_threshold
             ]
 
         for topic in self._resolver.canonicalize_many(weak_topics):

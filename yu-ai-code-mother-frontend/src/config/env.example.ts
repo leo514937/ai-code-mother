@@ -9,11 +9,19 @@
  * # API 基础地址
  * VITE_API_BASE_URL=http://localhost:8123/api
  *
+ * # 智能助手独立 API 基础地址
+ * VITE_AGENT_API_BASE_URL=http://localhost:8123/api/agent
+ *
+ * # 学习助手独立 API 基础地址
+ * VITE_LEARNING_API_BASE_URL=http://127.0.0.1:9000
+ *
  * 生产环境可以创建 .env.production 文件：
  *
  * # 生产环境配置示例
  * VITE_DEPLOY_DOMAIN=https://your-domain.com
  * VITE_API_BASE_URL=https://api.your-domain.com
+ * VITE_AGENT_API_BASE_URL=https://agent-api.your-domain.com
+ * VITE_LEARNING_API_BASE_URL=https://learning-api.your-domain.com
  */
 
 export {}

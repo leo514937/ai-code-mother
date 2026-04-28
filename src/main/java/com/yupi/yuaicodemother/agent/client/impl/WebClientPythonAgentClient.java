@@ -13,6 +13,7 @@ import com.yupi.yuaicodemother.agent.exception.PythonAgentTimeoutException;
 import io.netty.channel.ConnectTimeoutException;
 import io.netty.handler.timeout.ReadTimeoutException;
 import java.net.SocketTimeoutException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeoutException;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -32,6 +33,18 @@ import reactor.core.publisher.Flux;
 public class WebClientPythonAgentClient implements PythonAgentClient {
 
     private static final String CHAT_STREAM_PATH = "/internal/v1/chat/stream";
+
+    private static final String FEEDBACK_REPORT_PATH = "/internal/v1/feedback/report";
+
+    private static final String FEEDBACK_SAMPLES_PATH = "/internal/v1/feedback/samples";
+
+    private static final String MEMORY_RECORDS_PATH = "/internal/v1/memory/records";
+
+    private static final String MEMORY_CANDIDATES_PATH = "/internal/v1/memory/candidates";
+
+    private static final String MEMORY_TRACES_PATH = "/internal/v1/memory/traces";
+
+    private static final String MEMORY_DELETION_JOBS_PATH = "/internal/v1/memory/deletion-jobs";
 
     private static final String INTERNAL_TOKEN_HEADER = "X-Internal-Token";
 
@@ -72,13 +85,60 @@ public class WebClientPythonAgentClient implements PythonAgentClient {
                 .onErrorMap(this::mapClientException);
     }
 
+    @Override
+    public Map<String, Object> getInternalJson(String path, Map<String, Object> queryParams) {
+        Map<String, Object> params = queryParams == null ? Map.of() : queryParams;
+        Map<String, Object> response = agentWebClient.get()
+                .uri(uriBuilder -> {
+                    var builder = uriBuilder.path(path);
+                    for (Map.Entry<String, Object> entry : params.entrySet()) {
+                        if (entry.getValue() != null) {
+                            builder = builder.queryParam(entry.getKey(), entry.getValue());
+                        }
+                    }
+                    return builder.build();
+                })
+                .headers(this::applyInternalTokenHeader)
+                .accept(MediaType.APPLICATION_JSON)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, responseMono -> responseMono.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(body -> buildInvokeException(responseMono.statusCode(), body)))
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+        return response == null ? new LinkedHashMap<>() : response;
+    }
+
+    @Override
+    public Map<String, Object> postInternalJson(String path, Object body) {
+        Map<String, Object> response = agentWebClient.post()
+                .uri(path)
+                .headers(this::applyInternalTokenHeader)
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_JSON)
+                .bodyValue(body == null ? Map.of() : body)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, responseMono -> responseMono.bodyToMono(String.class)
+                        .defaultIfEmpty("")
+                        .map(inner -> buildInvokeException(responseMono.statusCode(), inner)))
+                .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                })
+                .block();
+        return response == null ? new LinkedHashMap<>() : response;
+    }
+
     private void applyHeaders(HttpHeaders headers, PythonChatStreamRequest request) {
+        applyInternalTokenHeader(headers);
+        if (StringUtils.hasText(request.getTraceId())) {
+            headers.set(TRACE_ID_HEADER, request.getTraceId());
+        }
+    }
+
+    private void applyInternalTokenHeader(HttpHeaders headers) {
         String internalToken = agentFeatureProperties.getPython().getInternalToken();
         if (StringUtils.hasText(internalToken)) {
             headers.set(INTERNAL_TOKEN_HEADER, internalToken);
-        }
-        if (StringUtils.hasText(request.getTraceId())) {
-            headers.set(TRACE_ID_HEADER, request.getTraceId());
         }
     }
 

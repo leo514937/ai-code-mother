@@ -265,18 +265,22 @@ const deleteApp = async (id: number | undefined) => {
 <style scoped>
 #appManagePage {
   padding: 24px;
-  background: white;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   margin-top: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 16px 40px var(--shadow-color);
 }
 
 .no-cover {
   width: 80px;
   height: 60px;
-  background: #f5f5f5;
+  background: var(--surface-muted);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #999;
+  color: var(--text-secondary);
   font-size: 12px;
   border-radius: 4px;
 }
@@ -289,18 +293,33 @@ const deleteApp = async (id: number | undefined) => {
 }
 
 .text-gray {
-  color: #999;
+  color: var(--text-secondary);
 }
 
 .featured-btn {
-  background: #faad14;
-  border-color: #faad14;
-  color: white;
+  background: rgb(var(--brand-secondary-rgb));
+  border-color: rgb(var(--brand-secondary-rgb));
+  color: var(--text-inverse);
 }
 
 .featured-btn:hover {
-  background: #d48806;
-  border-color: #d48806;
+  background: rgba(var(--brand-secondary-rgb), 0.88);
+  border-color: rgba(var(--brand-secondary-rgb), 0.88);
+}
+
+#appManagePage :deep(.ant-table) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+#appManagePage :deep(.ant-table-thead > tr > th) {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+#appManagePage :deep(.ant-table-tbody > tr > td) {
+  border-color: var(--border-color);
 }
 
 :deep(.ant-table-tbody > tr > td) {

@@ -24,7 +24,22 @@ def build_initial_state(
         base_persistent = base_persistent.model_copy(update={"history_summary": command.history_summary})
     return GraphState(
         persistent=base_persistent,
-        turn=TurnRuntimeState(raw_query=command.message),
+        turn=TurnRuntimeState(
+            raw_query=command.message,
+            sensory_memory={
+                "raw_message": command.message,
+                "topic_hint": command.topic_hint,
+                "response_mode": command.response_mode.value if command.response_mode else None,
+                "client_context": deepcopy(command.client_context),
+            },
+            short_term_window=[
+                {
+                    "role": "user",
+                    "content": command.message,
+                    "turn_id": command.turn_id,
+                }
+            ],
+        ),
         runtime=GraphRuntimeMeta(
             trace_id=command.trace_id,
             session_id=command.session_id,

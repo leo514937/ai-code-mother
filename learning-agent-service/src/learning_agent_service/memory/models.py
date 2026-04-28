@@ -67,6 +67,11 @@ class PersistentSessionContext:
     active_plan_id: Optional[str] = None
     learning_mode: Optional[bool] = None
     history_summary: Optional[str] = None
+    open_questions: Tuple[str, ...] = ()
+    confirmed_facts: Tuple[str, ...] = ()
+    next_steps: Tuple[str, ...] = ()
+    summary_version: int = 0
+    summary_updated_at: Optional[datetime] = None
     pending_clarification: Optional[Mapping[str, Any]] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -122,6 +127,11 @@ class SessionUpdate:
     last_retrieval_topic: Optional[str] = None
     learning_mode: Optional[bool] = None
     history_summary: Optional[str] = None
+    open_questions: Tuple[str, ...] = ()
+    confirmed_facts: Tuple[str, ...] = ()
+    next_steps: Tuple[str, ...] = ()
+    summary_version: int = 0
+    summary_updated_at: Optional[datetime] = None
     pending_clarification: Optional[Mapping[str, Any]] = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 

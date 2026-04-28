@@ -85,10 +85,14 @@ const handleSubmit = async (values: API.UserRegisterRequest) => {
 
 <style scoped>
 #userRegisterPage {
-  background: white;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   max-width: 720px;
   padding: 24px;
   margin: 24px auto;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 16px 40px var(--shadow-color);
 }
 
 .title {
@@ -98,14 +102,26 @@ const handleSubmit = async (values: API.UserRegisterRequest) => {
 
 .desc {
   text-align: center;
-  color: #bbb;
+  color: var(--text-secondary);
   margin-bottom: 16px;
 }
 
 .tips {
   margin-bottom: 16px;
-  color: #bbb;
+  color: var(--text-secondary);
   font-size: 13px;
   text-align: right;
+}
+
+#userRegisterPage :deep(.ant-input),
+#userRegisterPage :deep(.ant-input-affix-wrapper) {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+#userRegisterPage :deep(.ant-input::placeholder),
+#userRegisterPage :deep(.ant-input-affix-wrapper input::placeholder) {
+  color: var(--text-tertiary);
 }
 </style>

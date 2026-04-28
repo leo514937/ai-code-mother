@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from learning_agent_service.application.workflow import (
+    PlanExecuteSubgraphServices,
     RagSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
@@ -21,6 +22,7 @@ class ChatWorkflowService:
             services=self._build_workflow_services(),
             prefer_langgraph=True,
             workflow_version=container.settings.workflow_version,
+            checkpointer=getattr(container, "workflow_checkpointer", None),
         )
 
     def run(
@@ -52,6 +54,15 @@ class ChatWorkflowService:
                 tool_planner=self._nodes.tool_planner,
                 tool_executor=self._nodes.tool_executor,
                 tool_result_normalizer=self._nodes.tool_result_normalizer,
+            ),
+            plan_execute_subgraph=PlanExecuteSubgraphServices(
+                plan_planner=self._nodes.plan_planner,
+                plan_validator=self._nodes.plan_validator,
+                step_executor=self._nodes.step_executor,
+                progress_checker=self._nodes.progress_checker,
+                plan_reviewer=self._nodes.plan_reviewer,
+                human_approval_stub=self._nodes.human_approval_stub,
+                replanner=self._nodes.replanner,
             ),
             compose_answer=self._nodes.compose_answer,
             persist_session=self._nodes.persist_session,

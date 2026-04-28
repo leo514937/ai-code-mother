@@ -7,7 +7,12 @@ import _bootstrap  # noqa: F401
 from pydantic import BaseModel
 
 from learning_agent_service.domain import (
+    AnswerComposeRequest,
     ChatTurnCommand,
+    Citation,
+    EvidenceItem,
+    EvidencePack,
+    RagResult,
     ToolExecutionCommand,
     ToolExecutionResult as DomainToolExecutionResult,
     ToolNormalizationRequest,
@@ -15,7 +20,7 @@ from learning_agent_service.domain import (
     ToolSelection as DomainToolSelection,
     build_initial_state,
 )
-from learning_agent_service.domain.enums import IntentType, ToolExecutionStatus, TurnDecision
+from learning_agent_service.domain.enums import IntentType, RagStatus, ToolExecutionStatus, TurnDecision
 from learning_agent_service.tools import (
     RegisteredTool,
     SideEffectLevel,
@@ -195,3 +200,111 @@ class ToolsTestCase(unittest.TestCase):
         self.assertEqual(normalized.status, ToolExecutionStatus.DEGRADED)
         self.assertTrue(normalized.extra["degraded"])
         self.assertEqual(normalized.extra["errors"]["code"], "LEARN-5301")
+
+    def test_answer_composer_refuses_when_evidence_empty(self) -> None:
+        empty_pack = EvidencePack(evidence_status="EMPTY")
+        rag_result = RagResult(status=RagStatus.EMPTY, evidence_pack=empty_pack, evidence_status="EMPTY")
+
+        from learning_agent_service.tools.service import AnswerComposer
+
+        output = AnswerComposer().compose(
+            AnswerComposeRequest(raw_query="什么是RAG", rag_result=rag_result)
+        )
+        self.assertEqual(output.answer_text, "当前知识库中没有找到足够依据回答该问题。")
+
+    def test_answer_composer_uses_grounded_llm_and_citations_when_evidence_ok(self) -> None:
+        calls: list[str] = []
+
+        def fake_llm(request: AnswerComposeRequest):
+            calls.append(request.raw_query)
+            return {"answer_text": "RAG 依赖检索到的证据。"}
+
+        from learning_agent_service.tools.service import AnswerComposer
+
+        pack = EvidencePack(
+            evidence_status="OK",
+            items=[
+                EvidenceItem(
+                    chunk_id="child-1",
+                    content="RAG 通过检索证据来约束回答。",
+                    score=0.92,
+                    document_id="doc-1",
+                    chunk_type="concept",
+                    citation_chunk_id="child-1",
+                    metadata={"title": "RAG 基础"},
+                )
+            ],
+            strong_items=[
+                EvidenceItem(
+                    chunk_id="child-1",
+                    content="RAG 通过检索证据来约束回答。",
+                    score=0.92,
+                    document_id="doc-1",
+                    chunk_type="concept",
+                    citation_chunk_id="child-1",
+                    metadata={"title": "RAG 基础"},
+                )
+            ],
+        )
+        rag_result = RagResult(
+            status=RagStatus.OK,
+            evidence_pack=pack,
+            evidence_status="OK",
+            citations=[
+                Citation(
+                    chunk_id="child-1",
+                    document_id="doc-1",
+                    source_type="document",
+                    version="v1",
+                    score=0.92,
+                    title="RAG 基础",
+                    locator="concept",
+                )
+            ],
+        )
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(raw_query="RAG 是什么", rag_result=rag_result)
+        )
+        self.assertEqual(calls, ["RAG 是什么"])
+        self.assertIn("RAG 依赖检索到的证据。", output.answer_text)
+        self.assertIn("证据引用", output.answer_text)
+
+    def test_answer_composer_weak_evidence_is_cautious(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        weak_pack = EvidencePack(
+            evidence_status="WEAK",
+            items=[
+                EvidenceItem(
+                    chunk_id="weak-1",
+                    content="RAG 有时候会检索外部证据。",
+                    score=0.35,
+                    document_id="doc-1",
+                    chunk_type="concept",
+                    tier="weak",
+                )
+            ],
+            weak_items=[
+                EvidenceItem(
+                    chunk_id="weak-1",
+                    content="RAG 有时候会检索外部证据。",
+                    score=0.35,
+                    document_id="doc-1",
+                    chunk_type="concept",
+                    tier="weak",
+                )
+            ],
+        )
+        rag_result = RagResult(status=RagStatus.DEGRADED, evidence_pack=weak_pack, evidence_status="WEAK")
+        output = AnswerComposer().compose(
+            AnswerComposeRequest(raw_query="RAG 是什么", rag_result=rag_result)
+        )
+        self.assertIn("谨慎判断", output.answer_text)
+        self.assertIn("建议补充", output.answer_text)
+
+    def test_builtin_tool_metadata_marks_save_learning_record_as_approval_required(self) -> None:
+        registry = build_default_tool_registry()
+        spec = registry.get("saveLearningRecord").spec
+
+        self.assertTrue(spec.requires_approval)
+        self.assertEqual(spec.allowed_execution_modes, ("plan_execute",))

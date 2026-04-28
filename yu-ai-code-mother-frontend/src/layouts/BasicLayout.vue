@@ -1,16 +1,21 @@
 <template>
   <a-layout class="basic-layout">
     <!-- 顶部导航栏 -->
-    <GlobalHeader @toggle-sidebar="toggleSidebar" />
+    <GlobalHeader />
     
     <a-layout style="flex: 1; overflow: hidden">
       <!-- 主要内容区域 -->
       <a-layout-content class="main-content">
-        <router-view />
+        <router-view v-slot="{ Component }">
+          <keep-alive include="HomePage,LearningAssistantPage">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </a-layout-content>
 
       <!-- 全局右侧智能助手侧边栏 (模仿 Cursor) -->
-      <a-layout-sider 
+      <a-layout-sider
+        v-if="showGlobalAgentSidebar"
         v-model:collapsed="collapsed" 
         :width="siderWidth" 
         :collapsedWidth="0"
@@ -23,24 +28,52 @@
         <!-- 侧边栏拖拽调宽用的把手 -->
         <div class="sider-resizer" @mousedown="startDrag"></div>
         
-        <AgentSidebar app-id="global-session" />
+        <AgentSidebar :app-id="sidebarAppId" />
       </a-layout-sider>
     </a-layout>
   </a-layout>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import GlobalHeader from '@/components/GlobalHeader.vue'
 import { AgentSidebar } from '@/features/agent-sidebar'
+import { useUiPreferenceStore } from '@/stores/uiPreference'
 
 const collapsed = ref(true)
 const siderWidth = ref(380)
 const isDragging = ref(false)
+const route = useRoute()
+const uiPreferenceStore = useUiPreferenceStore()
 
-const toggleSidebar = () => {
-  collapsed.value = !collapsed.value
+const showGlobalAgentSidebar = computed(() => route.path.startsWith('/app/chat/'))
+
+const sidebarAppId = computed(() => {
+  const routeId = route.params.id
+  if (typeof routeId === 'string' || typeof routeId === 'number') {
+    const normalizedId = String(routeId).trim()
+    if (/^\d+$/.test(normalizedId) && route.path.startsWith('/app/')) {
+      return normalizedId
+    }
+  }
+  return undefined
+})
+
+const syncUiMode = () => {
+  const nextMode = route.path.startsWith('/learning') ? 'learning' : 'coding'
+  if (uiPreferenceStore.uiMode !== nextMode) {
+    uiPreferenceStore.setUiMode(nextMode)
+  }
 }
+
+watch(
+  () => route.path,
+  () => {
+    syncUiMode()
+  },
+  { immediate: true },
+)
 
 const startDrag = (e: MouseEvent) => {
   e.preventDefault()
@@ -81,15 +114,15 @@ const stopDrag = () => {
 .main-content {
   flex: 1;
   padding: 0;
-  background: none;
+  background: var(--app-bg);
   margin: 0;
   overflow-y: auto;
 }
 
 .global-agent-sider {
-  border-left: 1px solid #f0f0f0;
-  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
-  background: white;
+  border-left: 1px solid var(--border-color);
+  box-shadow: -2px 0 18px var(--shadow-color);
+  background: var(--surface-bg);
   z-index: 10;
   position: relative;
   transition: width 0.2s cubic-bezier(0.2, 0, 0, 1) 0s;
@@ -113,6 +146,6 @@ const stopDrag = () => {
 }
 
 .sider-resizer:hover, .sider-resizer:active {
-  background: #1890ff;
+  background: rgb(var(--brand-primary-rgb));
 }
 </style>

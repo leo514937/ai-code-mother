@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 from ...domain.contracts import (
     AnswerComposeRequest,
@@ -15,10 +15,14 @@ from ...domain.contracts import (
     FinalPayload,
     HybridRetrieveRequest,
     MasteryUpdateCommand,
+    MemoryUsedItemSummary,
+    MemoryUsedSummary,
+    PlanStep,
     PersistSessionCommand,
     RagResult,
     RecommendationQuery,
     ReferenceResolutionRequest,
+    RetrievalSummary,
     QueryRewriteRequest,
     RetrievalPlan,
     SseEnvelope,
@@ -29,23 +33,58 @@ from ...domain.contracts import (
     TurnRuntimeState,
 )
 from ...domain.enums import IntentType, RagStatus, ToolExecutionStatus, TurnDecision
+from ...domain.guards import evaluate_clarification
 from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from ...domain.state import GraphState
+from ...api.contracts import EventType
 from ...memory.models import MemoryCapabilityError
+from .plan_execute import ReactStepExecutor
 
 
 class WorkflowNodeAdapter:
     def __init__(self, container) -> None:
         self.container = container
+        self._plan_executor = ReactStepExecutor(container, append_event=self._append_event)
 
     def load_context(self, state: GraphState) -> GraphState:
         runtime = state["runtime"]
         loaded = self.container.session_context_store.load(runtime.session_id, runtime.user_id)
-        state["persistent"] = loaded.model_copy(
-            update={
-                "history_summary": loaded.history_summary or runtime.history_summary,
-            }
-        )
+        state["persistent"] = loaded.model_copy(update={"history_summary": loaded.history_summary or runtime.history_summary})
+        memory_orchestrator = getattr(self.container, "memory_orchestrator", None)
+        if memory_orchestrator is not None:
+            state = self._append_event(
+                state,
+                EventType.MEMORY_RETRIEVAL_STARTED.value,
+                {
+                    "trace_id": runtime.trace_id,
+                    "session_id": runtime.session_id,
+                    "turn_id": runtime.turn_id,
+                    "user_id": runtime.user_id,
+                    "query": state["turn"].raw_query,
+                    "current_topic": state["persistent"].current_topic,
+                    "retrieval_budget": state["turn"].retrieval_plan.retrieval_budget if state["turn"].retrieval_plan else 0,
+                },
+            )
+            pack = memory_orchestrator.retrieve_for_state(state)
+            injection = memory_orchestrator.build_injection_plan(pack)
+            state = memory_orchestrator.attach_to_state(state, pack, injection)
+            trace = state["runtime"].memory_trace
+            state = self._append_event(
+                state,
+                EventType.MEMORY_RETRIEVAL_RESULT.value,
+                {
+                    "trace_id": runtime.trace_id,
+                    "session_id": runtime.session_id,
+                    "turn_id": runtime.turn_id,
+                    "retrieved": list(trace.retrieved) if trace else [],
+                    "injected": list(trace.injected) if trace else [],
+                    "skipped": list(trace.skipped) if trace else [],
+                    "candidates": list(trace.candidates) if trace else [],
+                    "retrieval_reason": trace.extra.get("retrieval_reason") if trace else None,
+                    "total_token_estimate": len(trace.retrieved) + len(trace.injected) if trace else 0,
+                    "trace_summary": dict(trace.extra) if trace else {},
+                },
+            )
         return state
 
     def parse_intent_slots(self, state: GraphState) -> GraphState:
@@ -90,24 +129,36 @@ class WorkflowNodeAdapter:
 
     def ambiguity_check(self, state: GraphState) -> GraphState:
         turn = state["turn"]
-        low_intent = turn.intent_confidence < 0.5
-        low_reference = turn.intent == IntentType.FOLLOW_UP and (
-            turn.reference_resolution is None or turn.reference_resolution.confidence < 0.5
+        policy = self.container.settings.policy_settings().workflow_understanding
+        decision = evaluate_clarification(
+            intent_confidence=turn.intent_confidence,
+            reference_confidence=turn.reference_resolution.confidence if turn.reference_resolution else None,
+            intent=turn.intent,
+            intent_threshold=policy.intent_confidence_threshold,
+            reference_threshold=policy.reference_resolution_confidence_threshold,
         )
-        if not low_intent and not low_reference:
+        if not decision.should_clarify:
             return state
 
         card = ClarificationCard(
             card_id="clarify-{turn_id}".format(turn_id=state["runtime"].turn_id),
             question="Which topic do you want to continue with?",
             options=self._build_clarification_options(state),
-            ambiguity_type="intent" if low_intent else "reference",
+            ambiguity_type="intent" if decision.reason == "low_intent_confidence" else "reference",
             source_turn_id=state["runtime"].turn_id,
         )
         state["turn"] = turn.model_copy(
             update={
                 "decision": TurnDecision.CLARIFY,
                 "clarification_card": card,
+                "extra": {
+                    **dict(turn.extra),
+                    "guard_reason": decision.reason,
+                    "policy_snapshot": {
+                        "intent_confidence_threshold": policy.intent_confidence_threshold,
+                        "reference_resolution_confidence_threshold": policy.reference_resolution_confidence_threshold,
+                    },
+                },
             }
         )
         return state
@@ -196,21 +247,79 @@ class WorkflowNodeAdapter:
         return options[:3]
 
     def rewrite_query(self, state: GraphState) -> GraphState:
+        runtime_filters = self._build_runtime_retrieval_filters(state["runtime"].client_context)
         plan = self.container.rag_orchestrator.rewrite_query(
             QueryRewriteRequest(
                 raw_query=state["turn"].raw_query,
                 intent=state["turn"].intent,
+                intent_confidence=state["turn"].intent_confidence,
                 requested_output_style=state["turn"].requested_output_style,
                 reference_resolution=state["turn"].reference_resolution,
                 current_topic=state["persistent"].current_topic,
                 topic_hint=state["runtime"].topic_hint,
                 user_preferences=dict(state["persistent"].user_preferences),
-                base_filters={},
+                base_filters=runtime_filters,
             )
         )
         turn = state["turn"]
         state["turn"] = turn.model_copy(update={"retrieval_plan": plan})
         return state
+
+    @staticmethod
+    def _build_runtime_retrieval_filters(client_context: Mapping[str, Any] | None) -> Dict[str, Any]:
+        context = dict(client_context or {})
+        filters: Dict[str, Any] = {}
+
+        tenant_id = WorkflowNodeAdapter._extract_tenant_id(context)
+        if tenant_id:
+            filters["tenant_id"] = tenant_id
+
+        permission_tags = WorkflowNodeAdapter._extract_permission_tags(context)
+        if permission_tags:
+            filters["permission_tags"] = list(permission_tags)
+
+        filters["is_active"] = True
+        return filters
+
+    @staticmethod
+    def _extract_tenant_id(context: Mapping[str, Any]) -> str | None:
+        for key in ("tenant_id", "tenant", "workspace_id", "org_id", "organization_id", "app_id"):
+            value = context.get(key)
+            if isinstance(value, Mapping):
+                nested = value.get("id") or value.get("tenant_id") or value.get("workspace_id") or value.get("org_id")
+                if nested not in (None, ""):
+                    return str(nested)
+            elif value not in (None, ""):
+                return str(value)
+        return None
+
+    @staticmethod
+    def _extract_permission_tags(context: Mapping[str, Any]) -> tuple[str, ...]:
+        collected: list[str] = []
+        for key in ("permission_tags", "permissions", "permission", "roles", "scopes"):
+            value = context.get(key)
+            if value in (None, ""):
+                continue
+            if isinstance(value, str):
+                collected.append(value)
+                continue
+            if isinstance(value, Mapping):
+                values = value.values()
+            else:
+                values = value
+            for item in values:
+                if item in (None, ""):
+                    continue
+                collected.append(str(item))
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in collected:
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+        return tuple(ordered)
 
     def hybrid_retrieve(self, state: GraphState) -> GraphState:
         plan = state["turn"].retrieval_plan
@@ -223,6 +332,9 @@ class WorkflowNodeAdapter:
                 "semantic_query": plan.semantic_query,
                 "keyword_query": plan.keyword_query,
                 "retrieval_filters": dict(plan.retrieval_filters),
+                "step_back_query": getattr(plan, "step_back_query", None),
+                "rewritten_queries": list(getattr(plan, "rewritten_queries", ())),
+                "supplemental_queries": list(getattr(plan, "supplemental_queries", ())),
             },
         )
 
@@ -231,6 +343,7 @@ class WorkflowNodeAdapter:
         runtime = state["runtime"]
         metrics = dict(runtime.metrics)
         metrics.update(hybrid.metrics)
+        metrics["retrieval_debug"] = hybrid.extra.get("retrieval_debug") if hasattr(hybrid, "extra") else None
         state["runtime"] = runtime.model_copy(update={"metrics": metrics})
         state["turn"] = state["turn"].model_copy(update={"hybrid_recall": hybrid})
         return state
@@ -258,16 +371,25 @@ class WorkflowNodeAdapter:
         )
         evidence = evidence if isinstance(evidence, EvidencePack) else EvidencePack()
         retrieval_strategy = "dense+sparse+metadata->rrf->rerank->evidence"
-        status = RagStatus.EMPTY
-        if evidence.items:
-            status = RagStatus.OK if len(evidence.items) >= 4 else RagStatus.DEGRADED
+        evidence_status = str(getattr(evidence, "evidence_status", "EMPTY") or "EMPTY").upper()
+        if evidence_status == "OK":
+            status = RagStatus.OK
+        elif evidence_status == "WEAK":
+            status = RagStatus.DEGRADED
+        else:
+            status = RagStatus.EMPTY
 
         runtime = state["runtime"]
         metrics = dict(runtime.metrics)
         metrics.setdefault("retrieval_hit_count", len(hybrid.reranked_hits))
         metrics["evidence_used_count"] = len(evidence.items)
+        metrics["evidence_strong_count"] = len(getattr(evidence, "strong_items", []))
+        metrics["evidence_weak_count"] = len(getattr(evidence, "weak_items", []))
+        metrics["evidence_status"] = evidence_status
+        metrics["evidence_debug"] = evidence.extra.get("retrieval_debug") if hasattr(evidence, "extra") else None
+        metrics["evidence_rejected_count"] = len(evidence.extra.get("rejected_items", [])) if hasattr(evidence, "extra") else 0
         errors = list(runtime.errors)
-        if not evidence.items:
+        if evidence_status == "EMPTY":
             errors.append(
                 build_error(
                     WorkflowErrorCode.EVIDENCE_INSUFFICIENT,
@@ -284,8 +406,17 @@ class WorkflowNodeAdapter:
                     status=status,
                     evidence_pack=evidence,
                     citations=list(state["turn"].citations),
+                    evidence_status=evidence_status,
                     retrieval_strategy=retrieval_strategy,
                     metrics=dict(metrics),
+                    extra={
+                        "retrieval_debug": metrics.get("retrieval_debug"),
+                        "evidence_debug": metrics.get("evidence_debug"),
+                        "evidence_rejected_count": metrics.get("evidence_rejected_count", 0),
+                        "evidence_status": evidence_status,
+                        "evidence_strong_count": metrics.get("evidence_strong_count", 0),
+                        "evidence_weak_count": metrics.get("evidence_weak_count", 0),
+                    },
                 ),
             }
         )
@@ -373,6 +504,27 @@ class WorkflowNodeAdapter:
             },
         )
 
+    def plan_planner(self, state: GraphState) -> GraphState:
+        return self._plan_executor.plan_planner(state)
+
+    def plan_validator(self, state: GraphState) -> GraphState:
+        return self._plan_executor.plan_validator(state)
+
+    def step_executor(self, state: GraphState) -> GraphState:
+        return self._plan_executor.step_executor(state)
+
+    def progress_checker(self, state: GraphState) -> GraphState:
+        return self._plan_executor.progress_checker(state)
+
+    def plan_reviewer(self, state: GraphState) -> GraphState:
+        return self._plan_executor.plan_reviewer(state)
+
+    def human_approval_stub(self, state: GraphState) -> GraphState:
+        return self._plan_executor.human_approval_stub(state)
+
+    def replanner(self, state: GraphState) -> GraphState:
+        return self._plan_executor.replanner(state)
+
     def persist_session(self, state: GraphState) -> GraphState:
         runtime = state["runtime"]
         turn = state["turn"]
@@ -408,6 +560,42 @@ class WorkflowNodeAdapter:
                 )
             }
         )
+        memory_orchestrator = getattr(self.container, "memory_orchestrator", None)
+        if memory_orchestrator is not None:
+            memory_write_plan = memory_orchestrator.promote_from_state(state)
+            state["turn"] = state["turn"].model_copy(update={"memory_write_plan": memory_write_plan})
+            trace = state["runtime"].memory_trace
+            state = self._append_event(
+                state,
+                EventType.MEMORY_PROMOTION_RESULT.value,
+                {
+                    "trace_id": runtime.trace_id,
+                    "session_id": runtime.session_id,
+                    "turn_id": runtime.turn_id,
+                    "candidate_ids": [candidate.candidate_id for candidate in memory_write_plan.candidates],
+                    "promoted_ids": [candidate.candidate_id for candidate in memory_write_plan.candidates if candidate.should_promote],
+                    "rejected_ids": [candidate.candidate_id for candidate in memory_write_plan.candidates if not candidate.should_promote],
+                    "governed_actions": dict(trace.extra.get("governance_actions", {})) if trace else {},
+                    "conflict_ids": list(trace.conflict_ids) if trace else [],
+                    "deletion_job_ids": list(trace.deletion_job_ids) if trace else [],
+                    "governance_summary": {
+                        "action_counts": self._count_governance_actions(trace.extra.get("governance_actions", {})) if trace else {},
+                        "decision_reasons": dict(trace.decision_reasons) if trace else {},
+                        "skip_reasons": dict(trace.skip_reasons) if trace else {},
+                        "memory_write_targets": list(trace.extra.get("memory_write_targets", [])) if trace else [],
+                    },
+                    "memory_trace": trace.model_dump(mode="json") if trace else {},
+                },
+            )
+            memory_updates = memory_updates.model_copy(
+                update={
+                    "extra": {
+                        **dict(memory_updates.extra),
+                        "memory_write_targets": [target.value for target in memory_write_plan.write_targets],
+                        "memory_write_count": len(memory_write_plan.candidates),
+                    }
+                }
+            )
         state["runtime"] = runtime.model_copy(
             update={
                 "memory_updates": memory_updates,
@@ -474,6 +662,8 @@ class WorkflowNodeAdapter:
                 rag_result=turn.rag_result,
                 tool_result=turn.tool_result,
                 recommendation=turn.recommendation,
+                plan_summary=turn.final_task_summary,
+                memory_injection_plan=turn.memory_injection_plan,
             )
         )
         runtime = state["runtime"]
@@ -558,6 +748,7 @@ class WorkflowNodeAdapter:
         turn: TurnRuntimeState,
         understanding,
     ) -> TurnRuntimeState:
+        plan = self._coerce_plan_steps(understanding.slots.get("plan"), turn.plan)
         return turn.model_copy(
             update={
                 "decision": understanding.decision,
@@ -568,8 +759,87 @@ class WorkflowNodeAdapter:
                 "retrieval_plan": turn.retrieval_plan or understanding.retrieval_plan,
                 "clarification_card": understanding.clarification_card,
                 "slots": dict(understanding.slots),
+                "task_complexity": self._coerce_task_complexity(
+                    understanding.slots.get("task_complexity"),
+                    turn.task_complexity,
+                ),
+                "execution_mode": self._coerce_execution_mode(
+                    understanding.slots.get("execution_mode"),
+                    turn.execution_mode,
+                ),
+                "risk_level": self._coerce_risk_level(
+                    understanding.slots.get("risk_level"),
+                    turn.risk_level,
+                ),
+                "plan": plan,
+                "need_human_approval": self._coerce_bool(
+                    understanding.slots.get("requires_approval"),
+                    turn.need_human_approval,
+                ),
+                "approval_request": self._coerce_mapping(
+                    understanding.slots.get("approval_request"),
+                    turn.approval_request,
+                ),
             }
         )
+
+    @staticmethod
+    def _coerce_bool(value: object, fallback: bool) -> bool:
+        if value is None:
+            return fallback
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "n", "off"}:
+                return False
+        return bool(value)
+
+    @staticmethod
+    def _coerce_task_complexity(value: object, fallback: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"simple", "complex"}:
+            return normalized
+        return fallback
+
+    @staticmethod
+    def _coerce_execution_mode(value: object, fallback: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"auto", "simple", "plan_execute"}:
+            return normalized
+        return fallback
+
+    @staticmethod
+    def _coerce_risk_level(value: object, fallback: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"low", "medium", "high"}:
+            return normalized
+        return fallback
+
+    @staticmethod
+    def _coerce_mapping(value: object, fallback: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return dict(value)
+        return dict(fallback)
+
+    def _coerce_plan_steps(self, value: object, fallback: list[PlanStep]) -> list[PlanStep]:
+        if not isinstance(value, list):
+            return list(fallback)
+        plan_steps: list[PlanStep] = []
+        for item in value:
+            if isinstance(item, PlanStep):
+                plan_steps.append(item)
+                continue
+            if isinstance(item, dict):
+                try:
+                    plan_steps.append(PlanStep.model_validate(item))
+                except Exception:
+                    continue
+        if value and not plan_steps:
+            return list(fallback)
+        return plan_steps
 
     def _resolved_topic(self, state: GraphState) -> str | None:
         persistent = state["persistent"]
@@ -653,6 +923,13 @@ class WorkflowNodeAdapter:
         )
         return extra
 
+    @staticmethod
+    def _count_governance_actions(governance_actions: Dict[str, str]) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for action in governance_actions.values():
+            counts[action] = counts.get(action, 0) + 1
+        return counts
+
     def _build_final_payload(self, state: GraphState) -> FinalPayload:
         turn = state["turn"]
         persistent = state["persistent"]
@@ -665,12 +942,24 @@ class WorkflowNodeAdapter:
         final_confidence = runtime.metrics.get("final_answer_confidence", 0.0)
         rag_result = turn.rag_result
         tool_result = turn.tool_result
+        used_tools = list(tool_result.used_tools if tool_result is not None else [])
+        if not used_tools and turn.step_results:
+            seen_tools: list[str] = []
+            for step_result in turn.step_results:
+                for tool_name in step_result.tools_used:
+                    if tool_name and tool_name not in seen_tools:
+                        seen_tools.append(tool_name)
+            used_tools = seen_tools
+        grounding_status = self._resolve_grounding_status(state)
         return FinalPayload(
             answer_text=turn.final_answer or "",
             citations=list(turn.citations or (rag_result.citations if rag_result else [])),
-            used_tools=tool_result.used_tools if tool_result is not None else [],
+            used_tools=used_tools,
             resolved_topic=resolved_topic,
             retrieval_strategy=rag_result.retrieval_strategy if rag_result is not None else None,
+            grounding_status=grounding_status,
+            retrieval_summary=self._build_retrieval_summary(state),
+            memory_used_summary=self._build_memory_used_summary(state),
             memory_updates=memory_updates,
             recommendation=recommendation.model_dump(mode="json") if recommendation is not None else None,
             confidence=final_confidence,
@@ -678,3 +967,98 @@ class WorkflowNodeAdapter:
             requested_output_style=turn.requested_output_style,
             metrics=runtime.metrics,
         )
+
+    def _resolve_grounding_status(self, state: GraphState) -> str:
+        turn = state["turn"]
+        runtime = state["runtime"]
+        rag_result = turn.rag_result
+        evidence_status = str(
+            (
+                rag_result.evidence_status
+                if rag_result is not None and rag_result.evidence_status
+                else runtime.metrics.get("evidence_status", "EMPTY")
+            )
+            or "EMPTY"
+        ).upper()
+        citation_count = len(turn.citations or (rag_result.citations if rag_result is not None else []))
+        if evidence_status == "OK" and citation_count > 0:
+            return "grounded"
+        if evidence_status == "WEAK" or citation_count > 0:
+            return "weakly_grounded"
+        return "not_grounded"
+
+    def _build_retrieval_summary(self, state: GraphState) -> RetrievalSummary | None:
+        turn = state["turn"]
+        runtime = state["runtime"]
+        plan = turn.retrieval_plan
+        rag_result = turn.rag_result
+        if plan is None and rag_result is None and not runtime.metrics:
+            return None
+        return RetrievalSummary(
+            semantic_query=plan.semantic_query if plan is not None else None,
+            keyword_query=plan.keyword_query if plan is not None else None,
+            retrieval_filters=dict(plan.retrieval_filters) if plan is not None else {},
+            retrieval_strategy=rag_result.retrieval_strategy if rag_result is not None else None,
+            retrieval_hit_count=int(runtime.metrics.get("retrieval_hit_count", 0) or 0),
+            evidence_used_count=int(runtime.metrics.get("evidence_used_count", 0) or 0),
+            evidence_status=str(
+                (
+                    rag_result.evidence_status
+                    if rag_result is not None and rag_result.evidence_status
+                    else runtime.metrics.get("evidence_status", "EMPTY")
+                )
+                or "EMPTY"
+            ).upper(),
+            evidence_strong_count=int(runtime.metrics.get("evidence_strong_count", 0) or 0),
+            evidence_weak_count=int(runtime.metrics.get("evidence_weak_count", 0) or 0),
+        )
+
+    def _build_memory_used_summary(self, state: GraphState) -> MemoryUsedSummary | None:
+        turn = state["turn"]
+        runtime = state["runtime"]
+        injection_plan = turn.memory_injection_plan
+        retrieved_pack = turn.retrieved_memory_pack
+        if injection_plan is None and retrieved_pack is None and runtime.memory_trace is None:
+            return None
+        prompt_memories = self._summarize_memories(getattr(injection_plan, "prompt_memories", []))
+        state_memories = self._summarize_memories(getattr(injection_plan, "state_memories", []))
+        tool_memories = self._summarize_memories(getattr(injection_plan, "tool_memories", []))
+        rag_memories = self._summarize_memories(getattr(injection_plan, "rag_memories", []))
+        total_memories = len(prompt_memories) + len(state_memories) + len(tool_memories) + len(rag_memories)
+        trace = runtime.memory_trace
+        total_token_estimate = 0
+        if trace is not None and trace.total_memory_tokens:
+            total_token_estimate = int(trace.total_memory_tokens)
+        elif retrieved_pack is not None:
+            total_token_estimate = int(getattr(retrieved_pack, "total_token_estimate", 0) or 0)
+        retrieval_reason = None
+        if retrieved_pack is not None:
+            retrieval_reason = getattr(retrieved_pack, "retrieval_reason", None)
+        elif trace is not None:
+            retrieval_reason = trace.extra.get("retrieval_reason")
+        return MemoryUsedSummary(
+            used=total_memories > 0,
+            total_memories=total_memories,
+            retrieval_reason=retrieval_reason,
+            total_token_estimate=total_token_estimate,
+            prompt_memories=prompt_memories,
+            state_memories=state_memories,
+            tool_memories=tool_memories,
+            rag_memories=rag_memories,
+        )
+
+    @staticmethod
+    def _summarize_memories(memories: Iterable[Any]) -> list[MemoryUsedItemSummary]:
+        summaries: list[MemoryUsedItemSummary] = []
+        for memory in memories:
+            summary = MemoryUsedItemSummary(
+                memory_id=str(getattr(memory, "memory_id", "") or ""),
+                memory_type=str(getattr(getattr(memory, "type", None), "value", getattr(memory, "type", "")) or ""),
+                scope=str(getattr(getattr(memory, "scope", None), "value", getattr(memory, "scope", "")) or ""),
+                summary=getattr(memory, "summary", None),
+                source=str(getattr(getattr(memory, "source", None), "value", getattr(memory, "source", "")) or ""),
+                confidence=float(getattr(memory, "confidence", 0.0) or 0.0),
+            )
+            if summary.memory_id:
+                summaries.append(summary)
+        return summaries

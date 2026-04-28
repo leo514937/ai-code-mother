@@ -94,3 +94,30 @@ class OutboxRepository(SqlAlchemyRepositoryBase):
             session.add(instance)
             session.flush()
             return instance
+
+    def list_recent(
+        self,
+        limit: int = 50,
+        *,
+        aggregate_type: Optional[str] = None,
+        event_type_prefix: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> List[OutboxEventModel]:
+        self._require_sqlalchemy()
+        with self.session_scope() as session:
+            query = select(OutboxEventModel)
+            if aggregate_type:
+                query = query.where(OutboxEventModel.aggregate_type == aggregate_type)
+            if event_type_prefix:
+                query = query.where(OutboxEventModel.event_type.like(f"{event_type_prefix}%"))
+            if trace_id:
+                query = query.where(OutboxEventModel.trace_id == trace_id)
+            models = list(
+                session.execute(
+                    query.order_by(
+                        OutboxEventModel.available_at.desc(),
+                        OutboxEventModel.created_at.desc(),
+                    ).limit(limit)
+                ).scalars()
+            )
+        return models

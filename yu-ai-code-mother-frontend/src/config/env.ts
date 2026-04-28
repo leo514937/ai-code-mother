@@ -9,6 +9,12 @@ export const DEPLOY_DOMAIN = import.meta.env.VITE_DEPLOY_DOMAIN || 'http://local
 // API 基础地址
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8123/api'
 
+// 智能助手独立 API 基础地址
+export const AGENT_API_BASE_URL = import.meta.env.VITE_AGENT_API_BASE_URL || `${API_BASE_URL}/agent`
+
+// 学习助手独立 API 基础地址
+export const LEARNING_API_BASE_URL = import.meta.env.VITE_LEARNING_API_BASE_URL || '/learning-api'
+
 // 静态资源地址
 export const STATIC_BASE_URL = `${API_BASE_URL}/static`
 

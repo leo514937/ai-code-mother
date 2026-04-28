@@ -5,7 +5,13 @@
         <div class="header-title">智能助手会话</div>
         <div class="header-subtitle">与代码生成主会话相互独立</div>
       </div>
-      <a-button type="primary" size="small" :loading="creating" @click="$emit('create')">
+      <a-button
+        type="primary"
+        size="small"
+        :loading="creating"
+        :disabled="!canCreate"
+        @click="$emit('create')"
+      >
         新建
       </a-button>
     </div>
@@ -48,6 +54,7 @@ defineProps<{
   loading?: boolean
   creating?: boolean
   archivingThreadId?: string
+  canCreate?: boolean
 }>()
 
 defineEmits<{
@@ -61,7 +68,7 @@ defineEmits<{
 .thread-list {
   display: flex;
   flex-direction: column;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .thread-header {
@@ -75,13 +82,13 @@ defineEmits<{
 .header-title {
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-primary);
 }
 
 .header-subtitle {
   margin-top: 4px;
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .thread-body {
@@ -91,7 +98,7 @@ defineEmits<{
 }
 
 .thread-empty {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -102,15 +109,15 @@ defineEmits<{
   gap: 12px;
   padding: 10px 12px;
   border-radius: 14px;
-  border: 1px solid #e5e7eb;
-  background: #ffffff;
+  border: 1px solid var(--border-color);
+  background: var(--surface-elevated);
   text-align: left;
   cursor: pointer;
 }
 
 .thread-item.active {
-  border-color: #38bdf8;
-  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.14);
+  border-color: rgb(var(--brand-primary-rgb));
+  box-shadow: 0 0 0 3px rgba(var(--brand-primary-rgb), 0.14);
 }
 
 .thread-item-main {
@@ -121,7 +128,7 @@ defineEmits<{
 .thread-title {
   font-size: 13px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -130,6 +137,6 @@ defineEmits<{
 .thread-time {
   margin-top: 4px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--text-tertiary);
 }
 </style>

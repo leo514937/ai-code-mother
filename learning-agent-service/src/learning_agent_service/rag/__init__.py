@@ -1,10 +1,20 @@
 from .citation import CitationBuilder
+from .backfill import KnowledgeChunkBackfillPlan, KnowledgeChunkBackfillResult, execute_knowledge_chunk_backfill, plan_knowledge_chunk_backfill
 from .defaults import DEFAULT_KNOWLEDGE_CHUNKS
+from .eval import (
+    RetrievalEvalCase,
+    build_default_eval_cases,
+    build_default_eval_service,
+    build_eval_service,
+    evaluate_retrieval_suite,
+    format_retrieval_eval_report,
+)
 from .domain_adapter import DomainRagAdapter
 from .evidence import EvidenceGovernanceConfig, EvidenceGovernanceService
 from .governance import KnowledgeGovernanceService
 from .heuristics import HeuristicModelGateway
 from .hybrid import HybridRetrieverConfig, HybridRetrieverService, InMemoryReranker, InMemoryTokenRetriever
+from .qdrant_filters import QdrantFilterBuilder
 from .models import (
     ChunkType,
     Citation,
@@ -19,11 +29,29 @@ from .models import (
     KnowledgeSearchRequest,
     KnowledgeSearchResult,
     RecallHit,
+    RetrievalDebugInfo,
+    RetrievalTrace,
+    RetrievalTraceItem,
     ReferenceResolution,
     ReferenceResolutionRequest,
     RetrievalFilters,
     RetrievalPlan,
     SourceType,
+)
+from .retrieval import (
+    HeuristicDenseRetriever,
+    HeuristicMetadataRetriever,
+    HeuristicReranker,
+    HeuristicSparseRetriever,
+    CrossEncoderReranker,
+    LocalBM25SparseRetriever,
+    ParentChildResolver,
+    QdrantMetadataRetriever,
+    QdrantOnlineDenseRetriever,
+    QdrantOnlineSparseRetriever,
+    RRFConfig,
+    ReciprocalRankFusion,
+    RemoteReranker,
 )
 from .protocols import (
     DenseRetriever,
@@ -60,8 +88,16 @@ __all__ = [
     "HybridRetrieverConfig",
     "HybridRetrieverService",
     "HeuristicModelGateway",
+    "HeuristicDenseRetriever",
+    "HeuristicMetadataRetriever",
+    "HeuristicReranker",
+    "HeuristicSparseRetriever",
+    "CrossEncoderReranker",
+    "KnowledgeChunkBackfillPlan",
+    "KnowledgeChunkBackfillResult",
     "InMemoryReranker",
     "InMemoryTokenRetriever",
+    "LocalBM25SparseRetriever",
     "KnowledgeChunk",
     "KnowledgeGovernanceDecision",
     "KnowledgeGovernanceService",
@@ -74,16 +110,35 @@ __all__ = [
     "KnowledgeSearchRequest",
     "KnowledgeSearchResult",
     "MetadataRetriever",
+    "ParentChildResolver",
+    "QdrantFilterBuilder",
+    "QdrantMetadataRetriever",
+    "RetrievalEvalCase",
+    "QdrantOnlineDenseRetriever",
+    "QdrantOnlineSparseRetriever",
     "QueryRewriteContext",
     "QueryRewriteService",
     "RecallHit",
+    "ReciprocalRankFusion",
+    "RetrievalDebugInfo",
     "ReferenceResolution",
     "ReferenceResolutionRequest",
     "ReferenceResolver",
     "ReferenceResolverProtocol",
+    "RemoteReranker",
     "Reranker",
+    "RRFConfig",
+    "RetrievalTrace",
+    "RetrievalTraceItem",
     "RetrievalFilters",
     "RetrievalPlan",
     "SourceType",
     "SparseRetriever",
+    "build_default_eval_cases",
+    "build_default_eval_service",
+    "build_eval_service",
+    "evaluate_retrieval_suite",
+    "format_retrieval_eval_report",
+    "execute_knowledge_chunk_backfill",
+    "plan_knowledge_chunk_backfill",
 ]

@@ -1,0 +1,6 @@
+INFO:     127.0.0.1:57116 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61996 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62000 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57230 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57233 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59482 - "POST /learning-api/internal/v1/chat/stream HTTP/1.1" 404 Not Found

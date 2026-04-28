@@ -20,8 +20,11 @@ export const useLoginUserStore = defineStore('loginUser', () => {
   }
 
   // 更新登录用户信息
-  function setLoginUser(newLoginUser: any) {
-    loginUser.value = newLoginUser
+  function setLoginUser(newLoginUser: Partial<API.LoginUserVO>) {
+    loginUser.value = {
+      ...loginUser.value,
+      ...newLoginUser,
+    }
   }
 
   return { loginUser, fetchLoginUser, setLoginUser }

@@ -30,6 +30,8 @@ from .models import (
     KnowledgeSearchResult,
     RecallHit,
     ReferenceResolutionRequest,
+    RetrievalTrace,
+    RetrievalTraceItem,
     RetrievalFilters,
     RetrievalPlan as InternalRetrievalPlan,
 )
@@ -56,7 +58,8 @@ class DomainRagAdapter:
             requested_output_style=self._style_value(request.requested_output_style),
             filters=self.to_internal_filters(request.base_filters),
             user_preferences=request.user_preferences,
-            extra={},
+            extra={"raw_query": request.raw_query, "intent_confidence": request.intent_confidence},
+            intent_confidence=request.intent_confidence,
         )
 
     def build_reference_request(self, request: DomainReferenceResolutionRequest) -> ReferenceResolutionRequest:
@@ -91,6 +94,14 @@ class DomainRagAdapter:
 
     def to_domain_plan(self, plan: InternalRetrievalPlan) -> RetrievalPlan:
         filters = plan.retrieval_filters
+        extra = dict(plan.extra)
+        extra.setdefault("step_back_query", plan.step_back_query)
+        extra.setdefault("rewritten_queries", list(plan.rewritten_queries))
+        extra.setdefault("supplemental_queries", list(plan.supplemental_queries))
+        extra.setdefault("hyde_passage", plan.hyde_passage)
+        extra.setdefault("hyde_trigger_reason", plan.hyde_trigger_reason)
+        extra.setdefault("hyde_applied", plan.hyde_applied)
+        extra.setdefault("metadata_filter_mode", plan.metadata_filter_mode)
         return RetrievalPlan(
             semantic_query=plan.semantic_query,
             keyword_query=plan.keyword_query,
@@ -106,7 +117,7 @@ class DomainRagAdapter:
             },
             preferred_chunk_types=list(plan.preferred_chunk_types),
             reasoning_notes=["rewrite_query_for_retrieval"],
-            extra=dict(plan.extra),
+            extra=extra,
         )
 
     def to_internal_plan(
@@ -125,6 +136,13 @@ class DomainRagAdapter:
             keyword_query=plan.keyword_query,
             retrieval_filters=self.to_internal_filters(plan.retrieval_filters),
             preferred_chunk_types=tuple(plan.preferred_chunk_types),
+            step_back_query=self._optional_str(plan.extra.get("step_back_query")),
+            rewritten_queries=self._coerce_query_list(plan.extra.get("rewritten_queries")),
+            supplemental_queries=self._coerce_query_list(plan.extra.get("supplemental_queries")),
+            hyde_passage=self._optional_str(plan.extra.get("hyde_passage")),
+            hyde_trigger_reason=self._optional_str(plan.extra.get("hyde_trigger_reason")),
+            hyde_applied=bool(plan.extra.get("hyde_applied", False)),
+            metadata_filter_mode=self._optional_str(plan.extra.get("metadata_filter_mode")) or "soft",
             dense_top_k=dense_top_k,
             sparse_top_k=sparse_top_k,
             metadata_top_k=metadata_top_k,
@@ -135,12 +153,17 @@ class DomainRagAdapter:
 
     def to_domain_hybrid(self, recall: HybridRecallResult) -> DomainHybridRecallResult:
         source_hits = tuple(recall.hits)
+        dense_hits = tuple(recall.dense_hits or tuple(hit for hit in source_hits if "dense" in hit.route_scores))
+        sparse_hits = tuple(recall.sparse_hits or tuple(hit for hit in source_hits if "sparse" in hit.route_scores))
+        metadata_hits = tuple(recall.metadata_hits or tuple(hit for hit in source_hits if "metadata" in hit.route_scores))
+        fused_hits = tuple(recall.fused_hits or source_hits)
+        reranked_hits = tuple(recall.reranked_hits or source_hits)
         return DomainHybridRecallResult(
-            dense_hits=self._to_domain_candidates(hit for hit in source_hits if "dense" in hit.route_scores),
-            sparse_hits=self._to_domain_candidates(hit for hit in source_hits if "sparse" in hit.route_scores),
-            metadata_hits=self._to_domain_candidates(hit for hit in source_hits if "metadata" in hit.route_scores),
-            fused_hits=self._to_domain_candidates(source_hits),
-            reranked_hits=self._to_domain_candidates(source_hits),
+            dense_hits=self._to_domain_candidates(dense_hits),
+            sparse_hits=self._to_domain_candidates(sparse_hits),
+            metadata_hits=self._to_domain_candidates(metadata_hits),
+            fused_hits=self._to_domain_candidates(fused_hits),
+            reranked_hits=self._to_domain_candidates(reranked_hits),
             metrics=dict(recall.metrics),
             extra={
                 "retrieval_strategy": recall.retrieval_strategy,
@@ -148,40 +171,57 @@ class DomainRagAdapter:
                 "query_plan": self.to_domain_plan(recall.query_plan).model_dump(mode="json")
                 if recall.query_plan is not None
                 else None,
+                "retrieval_debug": recall.debug_trace.to_dict() if recall.debug_trace is not None else None,
             },
         )
 
     def to_internal_hits(self, candidates: Iterable[HybridRecallCandidate]) -> Tuple[RecallHit, ...]:
         hits = []
         for index, candidate in enumerate(candidates, start=1):
-            metadata = dict(candidate.metadata)
-            raw = dict(candidate.raw)
+            metadata = dict(self._candidate_mapping(candidate, "metadata", {}))
+            raw = dict(self._candidate_mapping(candidate, "raw", {}))
+            chunk_id = str(self._candidate_value(candidate, "chunk_id"))
+            document_id = str(self._candidate_value(candidate, "document_id"))
+            score = float(self._candidate_value(candidate, "score", 0.0) or 0.0)
+            route = str(raw.get("route") or self._candidate_value(candidate, "route") or "hybrid")
+            rank = int(raw.get("rank") or self._candidate_value(candidate, "rank") or index)
+            payload = {
+                **raw,
+                **metadata,
+                "chunk_id": chunk_id,
+                "doc_id": document_id,
+                "document_id": document_id,
+                "text": str(self._candidate_value(candidate, "content", "") or ""),
+                "title": metadata.get("title") or chunk_id,
+                "chunk_type": metadata.get("chunk_type") or self._candidate_value(candidate, "chunk_type"),
+            }
+            chunk = KnowledgeChunk.from_payload(payload, fallback_chunk_id=chunk_id, fallback_document_id=document_id)
+            if chunk is None:
+                continue
             hits.append(
                 RecallHit(
-                    chunk=KnowledgeChunk(
-                        chunk_id=candidate.chunk_id,
-                        document_id=candidate.document_id or "unknown-document",
-                        text=candidate.content or "",
-                        title=str(metadata.get("title") or candidate.chunk_id),
-                        category=self._optional_str(metadata.get("category")),
-                        subcategory=self._optional_str(metadata.get("subcategory")),
-                        difficulty=self._optional_str(metadata.get("difficulty")),
-                        source_type=self._optional_str(metadata.get("source_type")),
-                        chunk_type=self._optional_str(candidate.chunk_type),
-                        version=self._optional_str(metadata.get("version")),
-                        tags=tuple(str(tag) for tag in metadata.get("tags", []) if tag),
-                        metadata=dict(raw.get("metadata", {})),
-                    ),
-                    score=float(candidate.score),
-                    route=str(raw.get("route") or "hybrid"),
-                    rank=int(raw.get("rank") or index),
+                    chunk=chunk,
+                    score=score,
+                    route=route,
+                    rank=rank,
                     route_scores=dict(raw.get("route_scores", {})),
-                    metadata=dict(raw.get("metadata", {})),
+                    metadata={**dict(raw.get("metadata", {})), **metadata},
+                    matched_routes=tuple(raw.get("matched_routes", ()) or self._candidate_value(candidate, "channels", ()) or ()),
+                    fused_score=float(raw.get("fused_score") or raw.get("rrf_score") or 0.0),
+                    rrf_score=float(raw.get("rrf_score") or 0.0),
+                    rerank_score=raw.get("rerank_score"),
+                    rerank_rank=int(raw.get("rerank_rank") or 0) or None,
+                    rerank_model=self._optional_str(raw.get("rerank_model")),
+                    source_chunk_id=self._optional_str(raw.get("source_chunk_id") or metadata.get("source_chunk_id") or chunk.chunk_id),
+                    citation_chunk_id=self._optional_str(raw.get("citation_chunk_id") or metadata.get("citation_chunk_id") or chunk.chunk_id),
+                    score_breakdown=dict(raw.get("score_breakdown", {})),
+                    rejected_reason=raw.get("rejected_reason"),
                 )
             )
         return tuple(hits)
 
     def to_domain_evidence_pack(self, evidence: InternalEvidencePack, plan: RetrievalPlan) -> EvidencePack:
+        evidence_status = getattr(evidence.evidence_status, "value", evidence.evidence_status)
         return EvidencePack(
             items=[
                 EvidenceItem(
@@ -190,16 +230,28 @@ class DomainRagAdapter:
                     score=item.score,
                     document_id=item.chunk.document_id,
                     chunk_type=item.chunk.chunk_type,
+                    tier=item.tier,
+                    citation_chunk_id=item.citation_chunk_id,
+                    source_chunk_id=item.source_chunk_id,
+                    parent_chunk_id=item.parent_chunk_id,
                     metadata={
                         "title": item.chunk.title,
+                        "summary": item.chunk.summary,
                         "category": item.chunk.category,
                         "subcategory": item.chunk.subcategory,
                         "difficulty": item.chunk.difficulty,
                         "source_type": item.chunk.source_type,
                         "version": item.chunk.version,
+                        "parent_id": item.chunk.parent_id,
+                        "is_latest": item.chunk.is_latest,
+                        "hash": item.chunk.hash,
                         "tags": list(item.chunk.tags),
                         "routes": list(item.routes),
                         "reasons": list(item.reasons),
+                        "tier": item.tier,
+                        "citation_chunk_id": item.citation_chunk_id,
+                        "source_chunk_id": item.source_chunk_id,
+                        "parent_chunk_id": item.parent_chunk_id,
                         **dict(item.metadata),
                     },
                 )
@@ -211,42 +263,135 @@ class DomainRagAdapter:
                 "rationale": list(evidence.rationale),
             },
             top_scores=[item.score for item in evidence.items],
+            evidence_status=evidence_status if isinstance(evidence_status, str) else str(evidence_status),
+            strong_items=[
+                EvidenceItem(
+                    chunk_id=item.chunk.chunk_id,
+                    content=item.chunk.text,
+                    score=item.score,
+                    document_id=item.chunk.document_id,
+                    chunk_type=item.chunk.chunk_type,
+                    tier=item.tier,
+                    citation_chunk_id=item.citation_chunk_id,
+                    source_chunk_id=item.source_chunk_id,
+                    parent_chunk_id=item.parent_chunk_id,
+                    metadata={
+                        "title": item.chunk.title,
+                        "summary": item.chunk.summary,
+                        "tier": item.tier,
+                        "citation_chunk_id": item.citation_chunk_id,
+                        "source_chunk_id": item.source_chunk_id,
+                        "parent_chunk_id": item.parent_chunk_id,
+                    },
+                )
+                for item in evidence.strong_items
+            ],
+            weak_items=[
+                EvidenceItem(
+                    chunk_id=item.chunk.chunk_id,
+                    content=item.chunk.text,
+                    score=item.score,
+                    document_id=item.chunk.document_id,
+                    chunk_type=item.chunk.chunk_type,
+                    tier=item.tier,
+                    citation_chunk_id=item.citation_chunk_id,
+                    source_chunk_id=item.source_chunk_id,
+                    parent_chunk_id=item.parent_chunk_id,
+                    metadata={
+                        "title": item.chunk.title,
+                        "summary": item.chunk.summary,
+                        "tier": item.tier,
+                        "citation_chunk_id": item.citation_chunk_id,
+                        "source_chunk_id": item.source_chunk_id,
+                        "parent_chunk_id": item.parent_chunk_id,
+                    },
+                )
+                for item in evidence.weak_items
+            ],
             extra={
                 "metrics": dict(evidence.metrics),
                 "query_plan": plan.model_dump(mode="json"),
+                "retrieval_debug": evidence.debug_trace.to_dict() if evidence.debug_trace is not None else None,
+                "rejected_items": [item.to_dict() for item in evidence.rejected_items],
             },
         )
 
     def to_internal_evidence_pack(self, request: CitationBuildRequest | EvidencePack) -> InternalEvidencePack:
         evidence = request.evidence_pack if hasattr(request, "evidence_pack") else request
+        rejected_items = tuple(
+            self._rejected_item_to_trace_item(item)
+            for item in evidence.extra.get("rejected_items", [])
+            if isinstance(item, dict) or hasattr(item, "chunk_id")
+        )
+        debug_trace = None
+        if isinstance(evidence.extra.get("retrieval_debug"), dict):
+            debug = dict(evidence.extra.get("retrieval_debug", {}))
+            debug_trace = RetrievalTrace(
+                raw_query=str(debug.get("raw_query") or ""),
+                semantic_query=str(debug.get("semantic_query") or ""),
+                keyword_query=str(debug.get("keyword_query") or ""),
+                retrieval_filters=self.to_internal_filters(debug.get("retrieval_filters", {})),
+                final_retrieval_filters=dict(debug.get("final_retrieval_filters", {})),
+                preferred_chunk_types=tuple(debug.get("preferred_chunk_types", [])),
+                metrics=dict(debug.get("metrics", {})),
+                extra=dict(debug.get("extra", {})),
+            )
+        def _build_internal_item(item: EvidenceItem, default_tier: str) -> InternalEvidenceItem:
+            chunk = KnowledgeChunk.from_payload(
+                {
+                    "chunk_id": item.chunk_id,
+                    "doc_id": item.document_id,
+                    "document_id": item.document_id,
+                    "text": item.content,
+                    "title": item.metadata.get("title") or item.chunk_id,
+                    "summary": item.metadata.get("summary"),
+                    "category": item.metadata.get("category"),
+                    "subcategory": item.metadata.get("subcategory"),
+                    "chunk_type": item.chunk_type,
+                    "source_type": item.metadata.get("source_type"),
+                    "version": item.metadata.get("version"),
+                    "tags": item.metadata.get("tags", []),
+                },
+                fallback_chunk_id=item.chunk_id,
+                fallback_document_id=item.document_id,
+            ) or KnowledgeChunk(
+                chunk_id=item.chunk_id,
+                document_id=item.document_id or "unknown-document",
+                text=item.content,
+                title=str(item.metadata.get("title") or item.chunk_id),
+            )
+            return InternalEvidenceItem(
+                chunk=chunk,
+                score=item.score,
+                routes=tuple(str(route) for route in item.metadata.get("routes", []) if route),
+                reasons=tuple(str(reason) for reason in item.metadata.get("reasons", []) if reason),
+                tier=str(item.metadata.get("tier") or item.tier or default_tier),
+                citation_chunk_id=self._optional_str(item.metadata.get("citation_chunk_id") or item.citation_chunk_id or item.chunk_id),
+                source_chunk_id=self._optional_str(item.metadata.get("source_chunk_id") or item.source_chunk_id or item.chunk_id),
+                parent_chunk_id=self._optional_str(item.metadata.get("parent_chunk_id") or item.parent_chunk_id or item.metadata.get("parent_id")),
+                metadata={
+                    "rejected_reason": item.metadata.get("rejected_reason"),
+                    "summary": item.metadata.get("summary"),
+                    "parent_id": item.metadata.get("parent_id"),
+                    "is_latest": item.metadata.get("is_latest"),
+                    "hash": item.metadata.get("hash"),
+                },
+            )
+
+        items = tuple(_build_internal_item(item, "weak") for item in evidence.items)
+        strong_items = tuple(_build_internal_item(item, "strong") for item in getattr(evidence, "strong_items", []))
+        weak_items = tuple(_build_internal_item(item, "weak") for item in getattr(evidence, "weak_items", []))
         return InternalEvidencePack(
-            items=tuple(
-                InternalEvidenceItem(
-                    chunk=KnowledgeChunk(
-                        chunk_id=item.chunk_id,
-                        document_id=item.document_id or "unknown-document",
-                        text=item.content,
-                        title=str(item.metadata.get("title") or item.chunk_id),
-                        category=self._optional_str(item.metadata.get("category")),
-                        subcategory=self._optional_str(item.metadata.get("subcategory")),
-                        difficulty=self._optional_str(item.metadata.get("difficulty")),
-                        source_type=self._optional_str(item.metadata.get("source_type")),
-                        chunk_type=self._optional_str(item.chunk_type),
-                        version=self._optional_str(item.metadata.get("version")),
-                        tags=tuple(str(tag) for tag in item.metadata.get("tags", []) if tag),
-                        metadata={},
-                    ),
-                    score=item.score,
-                    routes=tuple(str(route) for route in item.metadata.get("routes", []) if route),
-                    reasons=tuple(str(reason) for reason in item.metadata.get("reasons", []) if reason),
-                    metadata={},
-                )
-                for item in evidence.items
-            ),
+            items=items,
             status=str(evidence.discard_summary.get("status", "empty")),
+            evidence_status=str(getattr(evidence, "evidence_status", "EMPTY") or evidence.discard_summary.get("status", "EMPTY")),
+            strong_items=strong_items,
+            weak_items=weak_items,
             filtered_out=int(evidence.discard_summary.get("filtered_out", 0)),
             rationale=tuple(str(reason) for reason in evidence.discard_summary.get("rationale", [])),
             metrics=dict(evidence.extra.get("metrics", {})),
+            rejected_items=rejected_items,
+            debug_trace=debug_trace,
         )
 
     def to_domain_citation(self, citation: InternalCitation) -> Citation:
@@ -307,6 +452,7 @@ class DomainRagAdapter:
                 "runtime_mode": result.runtime_mode,
                 "metrics": dict(result.metrics),
                 "retrieval_plan": domain_plan.model_dump(mode="json"),
+                "retrieval_debug": result.extra.get("retrieval_debug"),
             },
         )
 
@@ -319,15 +465,24 @@ class DomainRagAdapter:
                 return (value,)
             return tuple(str(item) for item in value if item)
 
+        raw = dict(raw_filters or {})
+        extra = dict(raw.get("extra", {}))
+        for key, value in raw.items():
+            if key in {"category", "subcategory", "difficulty", "source_type", "chunk_type", "version", "tags", "extra"}:
+                continue
+            if value in (None, ""):
+                continue
+            extra[key] = value
+
         return RetrievalFilters(
-            category=coerce(raw_filters.get("category")),
-            subcategory=coerce(raw_filters.get("subcategory")),
-            difficulty=coerce(raw_filters.get("difficulty")),
-            source_type=coerce(raw_filters.get("source_type")),
-            chunk_type=coerce(raw_filters.get("chunk_type")),
-            version=coerce(raw_filters.get("version")),
-            tags=coerce(raw_filters.get("tags")),
-            extra=dict(raw_filters.get("extra", {})),
+            category=coerce(raw.get("category")),
+            subcategory=coerce(raw.get("subcategory")),
+            difficulty=coerce(raw.get("difficulty")),
+            source_type=coerce(raw.get("source_type")),
+            chunk_type=coerce(raw.get("chunk_type")),
+            version=coerce(raw.get("version")),
+            tags=coerce(raw.get("tags")),
+            extra=extra,
         )
 
     @staticmethod
@@ -347,11 +502,15 @@ class DomainRagAdapter:
                 chunk_type=hit.chunk.chunk_type,
                 metadata={
                     "title": hit.chunk.title,
+                    "summary": hit.chunk.summary,
                     "category": hit.chunk.category,
                     "subcategory": hit.chunk.subcategory,
                     "difficulty": hit.chunk.difficulty,
                     "source_type": hit.chunk.source_type,
                     "version": hit.chunk.version,
+                    "parent_id": hit.chunk.parent_id,
+                    "is_latest": hit.chunk.is_latest,
+                    "hash": hit.chunk.hash,
                     "tags": list(hit.chunk.tags),
                 },
                 channels=list(sorted(hit.route_scores)) or [hit.route],
@@ -359,6 +518,11 @@ class DomainRagAdapter:
                     "route": hit.route,
                     "rank": hit.rank,
                     "route_scores": dict(hit.route_scores),
+                    "matched_routes": list(hit.matched_routes),
+                    "rrf_score": hit.rrf_score,
+                    "rerank_score": hit.rerank_score,
+                    "score_breakdown": dict(hit.score_breakdown),
+                    "rejected_reason": hit.rejected_reason,
                     "metadata": dict(hit.metadata),
                 },
             )
@@ -378,6 +542,63 @@ class DomainRagAdapter:
         if value is None or value == "":
             return None
         return str(value)
+
+    @staticmethod
+    def _coerce_query_list(value: Any) -> Tuple[str, ...]:
+        if not value:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return tuple(str(item) for item in value if item)
+        return (str(value),)
+
+    @staticmethod
+    def _candidate_value(candidate: Any, key: str, default: Any = None) -> Any:
+        if isinstance(candidate, Mapping):
+            return candidate.get(key, default)
+        return getattr(candidate, key, default)
+
+    @staticmethod
+    def _candidate_mapping(candidate: Any, key: str, default: Any = None) -> Mapping[str, Any]:
+        value = DomainRagAdapter._candidate_value(candidate, key, default or {})
+        if isinstance(value, Mapping):
+            return value
+        return {}
+
+    def _rejected_item_to_trace_item(self, item: Any) -> RetrievalTraceItem:
+        chunk_id = str(self._candidate_value(item, "chunk_id", ""))
+        document_id = str(self._candidate_value(item, "document_id", "") or self._candidate_value(item, "doc_id", ""))
+        content = str(self._candidate_value(item, "content", ""))
+        metadata = dict(self._candidate_value(item, "metadata", {}) or {})
+        payload = {
+            "chunk_id": chunk_id,
+            "doc_id": document_id,
+            "document_id": document_id,
+            "text": content,
+            "title": metadata.get("title") or chunk_id,
+            "summary": metadata.get("summary"),
+            "category": metadata.get("category"),
+            "subcategory": metadata.get("subcategory"),
+            "chunk_type": self._candidate_value(item, "chunk_type", metadata.get("chunk_type")),
+            "source_type": metadata.get("source_type"),
+            "version": metadata.get("version"),
+            "tags": metadata.get("tags", []),
+        }
+        chunk = KnowledgeChunk.from_payload(
+            payload,
+            fallback_chunk_id=chunk_id or None,
+            fallback_document_id=document_id or None,
+        ) or KnowledgeChunk(
+            chunk_id=chunk_id or "unknown-chunk",
+            document_id=document_id or "unknown-document",
+            text=content,
+            title=str(metadata.get("title") or chunk_id or "unknown-chunk"),
+        )
+        return RetrievalTraceItem.from_chunk(
+            chunk,
+            rejected_reason=str(self._candidate_value(item, "rejected_reason", metadata.get("rejected_reason")) or ""),
+        )
 
     @staticmethod
     def _looks_like_follow_up_query(

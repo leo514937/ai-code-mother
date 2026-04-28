@@ -32,6 +32,16 @@ public class AgentSseEventVO implements Serializable {
     private String traceId;
 
     /**
+     * Python session id.
+     */
+    private String sessionId;
+
+    /**
+     * Workflow version.
+     */
+    private String workflowVersion;
+
+    /**
      * Event time.
      */
     private LocalDateTime timestamp;

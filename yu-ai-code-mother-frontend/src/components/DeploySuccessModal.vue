@@ -69,6 +69,7 @@ const handleClose = () => {
 .deploy-success {
   text-align: center;
   padding: 24px;
+  color: var(--text-primary);
 }
 
 .success-icon {
@@ -83,7 +84,7 @@ const handleClose = () => {
 
 .deploy-success p {
   margin: 0 0 24px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .deploy-url {
@@ -94,5 +95,29 @@ const handleClose = () => {
   display: flex;
   gap: 12px;
   justify-content: center;
+}
+
+:deep(.ant-modal-content) {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+:deep(.ant-modal-header) {
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--border-color);
+}
+
+:deep(.ant-modal-title) {
+  color: var(--text-primary);
+}
+
+:deep(.ant-modal-body) {
+  color: var(--text-primary);
+}
+
+:deep(.ant-input) {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  border-color: var(--border-color);
 }
 </style>

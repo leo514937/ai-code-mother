@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+from learning_agent_service.domain.memory import MemoryCandidate
 
 from .canonical import CanonicalTopicResolver
 from .models import (
@@ -14,6 +16,8 @@ from .models import (
     SemanticMemoryFact,
     SessionUpdate,
 )
+from .extraction import LLMMemoryExtractor, RuleBasedMemoryExtractor
+from .governance import MemoryGovernancePolicy
 
 
 @dataclass(frozen=True)
@@ -44,19 +48,42 @@ class SessionMemoryUpdater:
         resolved_topic: Optional[str],
         clarification_result: Optional[Mapping[str, Any]] = None,
         learning_mode: Optional[bool] = None,
+        summary_payload: Optional[Mapping[str, Any]] = None,
     ) -> SessionUpdate:
         topic = self._resolver.canonicalize(resolved_topic) if resolved_topic else current.current_topic
         entities = list(current.recent_entities)
         if topic:
             entities.insert(0, topic)
         deduped_entities = tuple(dict.fromkeys(entity for entity in entities if entity))[:5]
+        extra_summary = dict(current.extra)
+        extra_summary.update(dict(summary_payload or {}))
+        current_open_questions = tuple(current.open_questions)
+        current_confirmed_facts = tuple(current.confirmed_facts)
+        current_next_steps = tuple(current.next_steps)
+        open_questions = tuple(dict.fromkeys(current_open_questions + tuple(extra_summary.get("open_questions", ()))))[
+            :5
+        ]
+        confirmed_facts = tuple(dict.fromkeys(current_confirmed_facts + tuple(extra_summary.get("confirmed_facts", ()))))[:8]
+        next_steps = tuple(dict.fromkeys(current_next_steps + tuple(extra_summary.get("next_steps", ()))))[:5]
+        summary_changed = bool(topic or open_questions or confirmed_facts or next_steps or clarification_result)
         return SessionUpdate(
             current_topic=topic,
             recent_entities=deduped_entities,
             clarification_result=dict(clarification_result or {}),
             last_retrieval_topic=topic or current.last_retrieval_topic,
             learning_mode=current.learning_mode if learning_mode is None else learning_mode,
-            history_summary=self._build_history_summary(current.history_summary, topic),
+            history_summary=self._build_history_summary(
+                current.history_summary,
+                topic,
+                open_questions=open_questions,
+                confirmed_facts=confirmed_facts,
+                next_steps=next_steps,
+            ),
+            open_questions=open_questions,
+            confirmed_facts=confirmed_facts,
+            next_steps=next_steps,
+            summary_version=current.summary_version + (1 if summary_changed else 0),
+            summary_updated_at=datetime.now(timezone.utc) if summary_changed else current.summary_updated_at,
             pending_clarification=None,
         )
 
@@ -72,37 +99,69 @@ class SessionMemoryUpdater:
             active_plan_id=current.active_plan_id,
             learning_mode=current.learning_mode if update.learning_mode is None else update.learning_mode,
             history_summary=update.history_summary or current.history_summary,
+            open_questions=update.open_questions or current.open_questions,
+            confirmed_facts=update.confirmed_facts or current.confirmed_facts,
+            next_steps=update.next_steps or current.next_steps,
+            summary_version=update.summary_version or current.summary_version,
+            summary_updated_at=update.summary_updated_at or current.summary_updated_at,
             pending_clarification=update.pending_clarification,
             extra=extra,
         )
 
-    def _build_history_summary(self, current_summary: Optional[str], topic: Optional[str]) -> Optional[str]:
+    def _build_history_summary(
+        self,
+        current_summary: Optional[str],
+        topic: Optional[str],
+        *,
+        open_questions: Tuple[str, ...] = (),
+        confirmed_facts: Tuple[str, ...] = (),
+        next_steps: Tuple[str, ...] = (),
+    ) -> Optional[str]:
         canonical_topic = self._resolver.canonicalize(topic) if topic else ""
-        if not canonical_topic:
+        segments = [segment.strip() for segment in (current_summary or "").split(" -> ") if segment.strip()]
+        if canonical_topic:
+            if canonical_topic in segments:
+                segments = [segment for segment in segments if segment != canonical_topic]
+            segments.append(canonical_topic)
+        if confirmed_facts:
+            segments.append("确认:" + "，".join(confirmed_facts[:2]))
+        if open_questions:
+            segments.append("待解:" + "，".join(open_questions[:2]))
+        if next_steps:
+            segments.append("下一步:" + "，".join(next_steps[:2]))
+        if not segments:
             return current_summary
-        if not current_summary:
-            return canonical_topic
-        segments = [segment.strip() for segment in current_summary.split(" -> ") if segment.strip()]
-        if canonical_topic in segments:
-            segments = [segment for segment in segments if segment != canonical_topic]
-        segments.append(canonical_topic)
         return " -> ".join(segments[-4:])
 
 
 class MemoryPromotionPolicy:
-    def __init__(self, config: PromotionConfig = None, resolver: Optional[CanonicalTopicResolver] = None) -> None:
-        self._config = config or PromotionConfig()
+    def __init__(
+        self,
+        config: PromotionConfig = None,
+        resolver: Optional[CanonicalTopicResolver] = None,
+        extractor: Optional[RuleBasedMemoryExtractor] = None,
+        llm_extractor: Optional[LLMMemoryExtractor] = None,
+        governance: Optional[MemoryGovernancePolicy] = None,
+    ) -> None:
+        self.config = config or PromotionConfig()
         self._resolver = resolver or CanonicalTopicResolver()
         self._updater = SessionMemoryUpdater(self._resolver)
+        self._extractor = extractor or RuleBasedMemoryExtractor()
+        self._llm_extractor = llm_extractor or LLMMemoryExtractor()
+        self._governance = governance or MemoryGovernancePolicy()
+
+    def govern_candidates(self, candidates: List[MemoryCandidate]) -> List[MemoryCandidate]:
+        return self._governance.evaluate_many(candidates)
 
     def evaluate(self, payload: MemoryPromotionInput) -> MemoryPromotionResult:
-        now = payload.current_time or datetime.utcnow()
+        now = payload.current_time or datetime.now(timezone.utc)
         topic = self._resolver.canonicalize(payload.resolved_topic) if payload.resolved_topic else None
         session_update = self._updater.build_update(
             current=payload.current_session,
             resolved_topic=topic,
             clarification_result=payload.extra.get("clarification_result"),
             learning_mode=payload.extra.get("learning_mode", payload.current_session.learning_mode),
+            summary_payload=payload.extra,
         )
 
         reasons: List[str] = []
@@ -123,7 +182,7 @@ class MemoryPromotionPolicy:
             preference_patch["answer_style_counter"] = counters
             if (
                 payload.explicit_signals.confirmed_output_style
-                or counters[output_style] >= self._config.preference_promote_count
+                or counters[output_style] >= self.config.preference_promote_count
             ):
                 preference_patch["preferred_output_style"] = output_style
                 reasons.append("promoted_output_style")
@@ -132,7 +191,7 @@ class MemoryPromotionPolicy:
             behavior_counters["code_examples"] = int(behavior_counters.get("code_examples", 0)) + 1
             if (
                 payload.explicit_signals.confirmed_code_examples
-                or behavior_counters["code_examples"] >= self._config.behavior_promote_count
+                or behavior_counters["code_examples"] >= self.config.behavior_promote_count
             ):
                 preference_patch["prefers_code_examples"] = True
                 reasons.append("promoted_code_example_preference")
@@ -141,7 +200,7 @@ class MemoryPromotionPolicy:
             behavior_counters["interview_mode"] = int(behavior_counters.get("interview_mode", 0)) + 1
             if (
                 payload.explicit_signals.confirmed_interview_mode
-                or behavior_counters["interview_mode"] >= self._config.behavior_promote_count
+                or behavior_counters["interview_mode"] >= self.config.behavior_promote_count
             ):
                 preference_patch["prefers_interview_mode"] = True
                 reasons.append("promoted_interview_preference")
@@ -163,11 +222,11 @@ class MemoryPromotionPolicy:
             )
 
         low_quiz_signal = (
-            payload.quiz_score is not None and payload.quiz_score < self._config.low_quiz_threshold
+            payload.quiz_score is not None and payload.quiz_score < self.config.low_quiz_threshold
         ) or payload.explicit_signals.low_quiz_score is not None
         if topic and (payload.explicit_signals.confused or low_quiz_signal):
             weak_topics.append(topic)
-        if mastery and mastery.negative_signals >= self._config.weak_topic_negative_threshold:
+        if mastery and mastery.negative_signals >= self.config.weak_topic_negative_threshold:
             weak_topics.append(mastery.topic)
         for weak_topic in payload.explicit_signals.weak_topics:
             weak_topics.append(self._resolver.canonicalize(weak_topic))
@@ -256,6 +315,10 @@ class MemoryPromotionPolicy:
                 )
             )
 
+        extracted_candidates = self._extractor.extract(payload)
+        llm_candidates = self._llm_extractor.extract(payload)
+        governed_candidates = self.govern_candidates(extracted_candidates + llm_candidates)
+
         return MemoryPromotionResult(
             session_update=session_update,
             preference_patch=preference_patch,
@@ -264,7 +327,12 @@ class MemoryPromotionPolicy:
             reasons=tuple(reasons),
             durable_fact_requests=tuple(durable_fact_requests),
             outbox_events=tuple(outbox_events),
-            extra={"resolved_topic": topic},
+            extra={
+                "resolved_topic": topic,
+                "extracted_candidates": extracted_candidates,
+                "llm_candidates": llm_candidates,
+                "governed_candidates": governed_candidates,
+            },
         )
 
     def build_write_plan(
@@ -292,6 +360,11 @@ class MemoryPromotionPolicy:
             active_plan_id=updated_context.active_plan_id,
             learning_mode=updated_context.learning_mode,
             history_summary=updated_context.history_summary,
+            open_questions=updated_context.open_questions,
+            confirmed_facts=updated_context.confirmed_facts,
+            next_steps=updated_context.next_steps,
+            summary_version=updated_context.summary_version,
+            summary_updated_at=updated_context.summary_updated_at,
             pending_clarification=updated_context.pending_clarification,
             extra=extra,
         )
@@ -309,6 +382,11 @@ class MemoryPromotionPolicy:
                 "promotion_reasons": list(result.reasons),
                 "weak_topics": list(result.weak_topics),
                 "history_summary": updated_context.history_summary,
+                "open_questions": list(updated_context.open_questions),
+                "confirmed_facts": list(updated_context.confirmed_facts),
+                "next_steps": list(updated_context.next_steps),
+                "summary_version": updated_context.summary_version,
+                "summary_updated_at": updated_context.summary_updated_at,
             },
         )
 
@@ -332,9 +410,9 @@ class MemoryPromotionPolicy:
             return True
         if payload.explicit_signals.confused or payload.explicit_signals.repeated_topic_signal:
             return True
-        if payload.quiz_score is not None and payload.quiz_score < self._config.low_quiz_threshold:
+        if payload.quiz_score is not None and payload.quiz_score < self.config.low_quiz_threshold:
             return True
-        if mastery is not None and getattr(mastery, "negative_signals", 0) >= self._config.weak_topic_negative_threshold:
+        if mastery is not None and getattr(mastery, "negative_signals", 0) >= self.config.weak_topic_negative_threshold:
             return True
         return False
 

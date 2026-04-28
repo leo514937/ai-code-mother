@@ -158,10 +158,40 @@ class _RichStreamService:
                 workflow_version="learn-agent/v1",
                 payload={
                     "answer_text": "Spring AOP is proxy-based.",
-                    "citations": [],
+                    "citations": [
+                        {
+                            "chunk_id": "chunk-aop-1",
+                            "document_id": "doc-spring-aop",
+                            "score": 0.91,
+                            "title": "Spring AOP 入门",
+                        }
+                    ],
                     "used_tools": ["searchKnowledge"],
                     "resolved_topic": "Spring AOP",
                     "retrieval_strategy": "dense+sparse+metadata->rrf->rerank->evidence",
+                    "grounding_status": "grounded",
+                    "retrieval_summary": {
+                        "semantic_query": "Spring AOP",
+                        "keyword_query": "spring aop",
+                        "retrieval_strategy": "dense+sparse+metadata->rrf->rerank->evidence",
+                        "retrieval_hit_count": 6,
+                        "evidence_used_count": 4,
+                        "evidence_status": "OK",
+                        "evidence_strong_count": 3,
+                        "retrieval_filters": {"category": "Spring"},
+                    },
+                    "memory_used_summary": {
+                        "used": True,
+                        "total_memories": 1,
+                        "retrieval_reason": "matched_preference",
+                        "prompt_memories": [
+                            {
+                                "memory_id": "pref-1",
+                                "memory_type": "preference",
+                                "summary": "用户喜欢结构化解释",
+                            }
+                        ],
+                    },
                     "memory_updates": {},
                     "recommendation": None,
                     "confidence": 0.88,
@@ -267,8 +297,13 @@ def _configured_internal_token(token: str = "service-secret"):
 
 async def _collect_body_chunks(response) -> list[str]:
     chunks = []
-    async for chunk in response.body_iterator:
-        chunks.append(chunk)
+    body_iterator = response.body_iterator
+    if hasattr(body_iterator, "__aiter__"):
+        async for chunk in body_iterator:
+            chunks.append(chunk)
+    else:
+        for chunk in body_iterator:
+            chunks.append(chunk)
     return chunks
 
 
@@ -569,3 +604,63 @@ class RuntimeBehaviorTestCase(unittest.TestCase):
 
             self.assertEqual(health_payload["status"], "ok")
             self.assertEqual(meta_payload["service"], "learning-agent-service")
+
+    def test_enterprise_health_routes_expose_readiness_and_dependency_snapshot(self) -> None:
+        app = app_module.create_app(_ProtectedRoutesService())
+        app.state.infrastructure_status = {
+            "runtime_profile": {
+                "name": "partial",
+                "components": [],
+                "bootstrap_errors": [],
+            },
+            "dependency_status": {
+                "adapters": [
+                    {"name": "redis", "mode": "real", "ready": True, "details": {}},
+                    {"name": "postgres", "mode": "real", "ready": True, "details": {}},
+                    {"name": "qdrant", "mode": "fallback", "ready": True, "details": {}},
+                ],
+                "bootstrap_errors": [],
+            },
+        }
+        live_route = next(route for route in app.routes if route.path == "/live")
+        ready_route = next(route for route in app.routes if route.path == "/ready")
+        dependency_route = next(route for route in app.routes if route.path == "/dependency-status")
+        metrics_route = next(route for route in app.routes if route.path == "/metrics")
+
+        live_payload = asyncio.run(live_route.endpoint())
+        ready_payload = asyncio.run(ready_route.endpoint())
+        dependency_payload = asyncio.run(dependency_route.endpoint())
+        metrics_payload = asyncio.run(metrics_route.endpoint())
+
+        self.assertEqual(live_payload["status"], "ok")
+        self.assertFalse(ready_payload["ready"])
+        self.assertEqual(ready_payload["status"], "not_ready")
+        self.assertIn("qdrant", ready_payload["blocking_dependencies"])
+        self.assertEqual(dependency_payload["runtime_profile"]["name"], "partial")
+        self.assertIn("counters", metrics_payload)
+        self.assertIn("dependency_gauges", metrics_payload)
+
+    def test_metrics_route_tracks_streaming_quality_counters(self) -> None:
+        app = app_module.create_app(_RichStreamService())
+        chat_route = next(route for route in app.routes if route.path == "/internal/v1/chat/stream")
+        metrics_route = next(route for route in app.routes if route.path == "/metrics")
+
+        response = asyncio.run(
+            chat_route.endpoint(
+                ChatStreamRequest(
+                    user_id="u1",
+                    session_id="s1",
+                    trace_id="t1",
+                    turn_id="turn-1",
+                    message="Help me explain Spring AOP",
+                )
+            )
+        )
+        chunks = asyncio.run(_collect_body_chunks(response))
+        metrics_payload = asyncio.run(metrics_route.endpoint())
+
+        self.assertEqual(len(chunks), 6)
+        self.assertEqual(metrics_payload["counters"]["stream_requests_total"], 1)
+        self.assertEqual(metrics_payload["counters"]["final_answers_total"], 1)
+        self.assertEqual(metrics_payload["counters"]["final_answers_with_citations_total"], 1)
+        self.assertEqual(metrics_payload["counters"]["memory_retrieval_events_total"], 0)

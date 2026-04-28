@@ -1,0 +1,47 @@
+
+> yu-ai-code-mother-frontend@0.0.0 dev
+> vite --host 127.0.0.1
+
+
+  [32m[1mVITE[22m v7.0.4[39m  [2mready in [0m[1m1184[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5173[22m/[39m
+  ➜  Vue DevTools: Open http://127.0.0.1:5173/__devtools__/ as a separate window
+  ➜  Vue DevTools: Press Alt(⌥)+Shift(⇧)+D in App to toggle the Vue DevTools
+[2m22:23:02[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue?vue&type=style&index=0&scoped=fa516ce6&lang.css[22m
+[2m22:26:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:26:17[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue, /src/components/[2m22:26:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:26:49[22m [36m[1m[vite][22m[39m [90m[2m(client)[22[2m22:27:15[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layouts/BasicLayout.vue[22m
+[2m22:28:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:28:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[2m22:28:09[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue[22m
+[2m22:28:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue, /src/components/GlobalHeader.vue?vue&type=style&index=0&scoped=fa516ce6&lang.css[22m
+[2m22:28:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:28:14[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/[2m22:36:20[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue[22m
+[2m22:36:26[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layouts/BasicLayout.vue[22m
+[2m22:36:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:36:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22[2m22:42:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:42:55[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32m[2m22:43:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:43:21[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/HomePage.vue, /src/pa[2m22:43:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/app/AppChatPage.vue?vue&type=style&index=0&scoped=8b0ba07a&lang.css[22m
+[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Mark[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AppDetailModal.vue?vue&type=style&index=0&scoped=d6da5c89&lang.css[22m
+[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/UserInfo.vue?vue&type=style&index=0&scoped=7dce473d&lang.css[22m
+[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:44:52[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/Deploy[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/user/U[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/admin/AppManagePage.vue?vue&type=style&index=0&scoped=b1beb95f&lang.css[22m
+[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/user/UserRegisterPage.vue?vue&type=style&index=0&scoped=0ed2e2a9&lang.css[22m
+[2m22:45:10[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/admin/Us[2m22:45:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:45:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/admin/Ch[2m22:46:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/app/AppEditPage.vue?vue&type=style&index=0&scoped=cd9d2888&lang.css[22m
+[2m22:46:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/s[2m22:46:04[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/app[2m22:46:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:46:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AppCard.vue?vue&type=style&[2m22:46:30[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/AppCard.vue?vue&type=style&index=0&scoped=313be872&lang.css[22m
+[2m22:46:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:46:51[22m [36m[1m[vite][22m[39m [90m[2m(client)[[2m22:49:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:49:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/[2m22:51:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:51:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue, /src/components/[2m22:52:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:52:45[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/[2m22:59:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/config/env.ts[22m
+[2m22:59:42[22m [36m[1m[vite][22m[39m [32m.env.development chan[2m22:59:42[22m [36m[1m[vit[2m22:59:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39[2m22:59:42[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/features/agent-sidebar/components/AgentSidebar.vue[2m22:59:42[22m [36m[1m[vite][22m[39m server restarted.
+[2m23:19:31[22m [36m[1m[vite][22m[39m [32m.env.development changed, restarting server...[39m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m23:19:31[22m [36m[1m[vite][22m[39m server restarted.
+t)[22m[39m [32mhmr update [39m[2m/src/features/agent-sidebar/components/AgentSidebar.vue[22m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/config/env.ts[22m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [32m.env.development changed, restarting server...[39m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/router/index.ts[22m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [32mvite.config.ts changed, restarting server...[39m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/GlobalHeader.vue[22m
+[2m23:19:31[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layouts/BasicLayout.vue[22m
+[2m23:19:31[22m [36m[1m[vite][22m[39m server restarted.
+[2m23:20:47[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/features/learning-assistant/api.ts[22m
+[2m23:21:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layouts/BasicLayout.vue[22m
+[2m23:21:05[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:21:25[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:22:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/layouts/BasicLayout.vue[22m
+[2m23:22:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/HomePage.vue[22m
+[2m23:22:19[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:22:32[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:23:35[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:23:57[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m
+[2m23:24:18[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/learning/LearningAssistantPage.vue[22m

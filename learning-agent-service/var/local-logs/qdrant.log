@@ -1,0 +1,38 @@
+           _                 _    
+  __ _  __| |_ __ __ _ _ __ | |_  
+ / _` |/ _` | '__/ _` | '_ \| __| 
+| (_| | (_| | | | (_| | | | | |_  
+ \__, |\__,_|_|  \__,_|_| |_|\__| 
+    |_|                           
+
+Version: 1.17.1, build: eabee371
+Access web UI at http://localhost:6333/dashboard
+
+2026-04-28T14:21:34.541176Z  WARN qdrant::settings: Config file not found: config/config
+2026-04-28T14:21:34.541246Z  WARN qdrant::settings: Config file not found: config/development
+2026-04-28T14:21:34.557317Z  WARN qdrant: There is a potential issue with the filesystem for storage path ./storage. Details: Filesystem type check is not supported on this platform
+2026-04-28T14:21:34.557859Z  INFO storage::content_manager::consensus::persistent: Loading raft state from ./storage\raft_state.json
+2026-04-28T14:21:34.562355Z  INFO storage::content_manager::toc: Loading collection: ontology_audit_chunks_v2
+2026-04-28T14:21:34.660703Z  INFO collection::shards::local_shard: Recovering shard ./storage\collections\ontology_audit_chunks_v2\0: 0/1 (0%)
+2026-04-28T14:21:34.781853Z  INFO collection::shards::local_shard: Recovered collection ontology_audit_chunks_v2: 1/1 (100%)
+2026-04-28T14:21:34.784110Z  INFO qdrant: Distributed mode disabled
+2026-04-28T14:21:34.784180Z  INFO qdrant: Telemetry reporting enabled, id: 6cf0c37e-f23d-4cf3-9ad6-0bc4ffc13f24
+2026-04-28T14:21:34.786596Z  INFO qdrant::actix: REST transport settings: keep_alive=5s, client_request_timeout=5s, client_disconnect_timeout=5s
+2026-04-28T14:21:34.786642Z  INFO qdrant::actix: TLS disabled for REST API
+2026-04-28T14:21:34.789996Z  INFO qdrant::actix: Qdrant HTTP listening on 6333
+2026-04-28T14:21:34.790049Z  INFO actix_server::builder: starting 13 workers
+2026-04-28T14:21:34.790077Z  INFO actix_server::server: Actix runtime found; starting in Actix runtime
+2026-04-28T14:21:34.790102Z  INFO actix_server::server: starting service: "actix-web-service-0.0.0.0:6333", workers: 13, listening on: 0.0.0.0:6333
+2026-04-28T14:21:34.798733Z  INFO qdrant::tonic: Qdrant gRPC listening on 6334
+2026-04-28T14:21:34.798821Z  INFO qdrant::tonic: TLS disabled for gRPC API
+2026-04-28T15:52:06.259297Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 98 "-" "python-client/1.17.1 python/3.11.9" 0.004950
+2026-04-28T15:52:10.122038Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002903
+2026-04-28T15:52:12.412135Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002485
+2026-04-28T15:52:14.593354Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002080
+2026-04-28T15:52:16.821409Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002273
+2026-04-28T15:52:19.073216Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 95 "-" "python-client/1.17.1 python/3.11.9" 0.002462
+2026-04-28T15:52:21.406825Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002475
+2026-04-28T15:52:24.183856Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.008458
+2026-04-28T15:52:27.691029Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002680
+2026-04-28T15:52:29.826680Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 96 "-" "python-client/1.17.1 python/3.11.9" 0.002677
+2026-04-28T15:52:32.055341Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/knowledge_chunks/points/scroll HTTP/1.1" 404 95 "-" "python-client/1.17.1 python/3.11.9" 0.002148

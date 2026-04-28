@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -102,7 +103,7 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 return 0;
             }
             // 反转列表，确保按照时间正序（老的在前，新的在后）
-            historyList = historyList.reversed();
+            Collections.reverse(historyList);
             // 按照时间顺序将消息添加到记忆中
             int loadedCount = 0;
             // 先清理历史缓存，防止重复加载

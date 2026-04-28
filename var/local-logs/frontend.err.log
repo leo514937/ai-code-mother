@@ -1,0 +1,37 @@
+[2m23:19:33[22m [31m[1m[vite][22m[39m [31mInternal server error: Failed to resolve import "@/pages/learning/LearningAssistantPage.vue" from "src/router/index.ts". Does the file exist?[39m
+  Plugin: [35mvite:import-analysis[39m
+  File: [36mD:/javacode/ai-code-mother/yu-ai-code-mother-frontend/src/router/index.ts[39m:10:34
+[33m  8  |  import AppEditPage from "@/pages/app/AppEditPage.vue";
+  9  |  import ChatManagePage from "@/pages/admin/ChatManagePage.vue";
+  10 |  import LearningAssistantPage from "@/pages/learning/LearningAssistantPage.vue";
+     |                                     ^
+  11 |  const router = createRouter({
+  12 |    history: createWebHistory(import.meta.env.BASE_URL),[39m
+      at TransformPluginContext._formatLog (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:31435:43)
+      at TransformPluginContext.error (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:31432:14)
+      at normalizeUrl (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:29978:18)
+      at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+      at async file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:30036:32
+      at async Promise.all (index 9)
+      at async TransformPluginContext.transform (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:30004:4)
+      at async file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite-plugin-vue-devtools/node_modules/vite-plugin-inspect/dist/index.mjs:1128:17
+      at async EnvironmentPluginContainer.transform (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:31249:14)
+      at async loadAndTransform (file:///D:/javacode/ai-code-mother/yu-ai-code-mother-frontend/node_modules/vite/dist/node/chunks/dep-DZ2tZksn.js:26419:26)
+[2m23:19:33[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to resolve import "@/pages/learning/LearningAssistantPage.vue" from "src/router/index.ts". Does the file exist?
+  Plugin: [35mvite:import-analysis[39m
+  File: [36mD:/javacode/ai-code-mother/yu-ai-code-mother-frontend/src/router/index.ts[39m:10:34
+[33m  8  |  import AppEditPage from "@/pages/app/AppEditPage.vue";
+  9  |  import ChatManagePage from "@/pages/admin/ChatManagePage.vue";
+  10 |  import LearningAssistantPage from "@/pages/learning/LearningAssistantPage.vue";
+     |                                     ^
+  11 |  const router = createRouter({
+  12 |    history: createWebHistory(import.meta.env.BASE_URL),[39m
+[2m23:19:33[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to resolve import "@/pages/learning/LearningAssistantPage.vue" from "src/router/index.ts". Does the file exist?
+  Plugin: [35mvite:import-analysis[39m
+  File: [36mD:/javacode/ai-code-mother/yu-ai-code-mother-frontend/src/router/index.ts[39m:10:34
+[33m  8  |  import AppEditPage from "@/pages/app/AppEditPage.vue";
+  9  |  import ChatManagePage from "@/pages/admin/ChatManagePage.vue";
+  10 |  import LearningAssistantPage from "@/pages/learning/LearningAssistantPage.vue";
+     |                                     ^
+  11 |  const router = createRouter({
+  12 |    history: createWebHistory(import.meta.env.BASE_URL),[39m

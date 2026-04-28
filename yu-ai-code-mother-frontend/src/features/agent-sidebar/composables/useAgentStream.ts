@@ -71,6 +71,12 @@ export const useAgentStream = () => {
       liveSnapshot.value.clarificationCard ?? persistedSnapshot.value.clarificationCard,
     finalMessage: liveSnapshot.value.finalMessage || persistedSnapshot.value.finalMessage,
     errorMessage: liveSnapshot.value.errorMessage || persistedSnapshot.value.errorMessage,
+    finalPayload: liveSnapshot.value.finalPayload ?? persistedSnapshot.value.finalPayload,
+    traceId: liveSnapshot.value.traceId || persistedSnapshot.value.traceId,
+    turnId: liveSnapshot.value.turnId || persistedSnapshot.value.turnId,
+    sessionId: liveSnapshot.value.sessionId || persistedSnapshot.value.sessionId,
+    workflowVersion:
+      liveSnapshot.value.workflowVersion || persistedSnapshot.value.workflowVersion,
   }))
 
   return {
@@ -79,6 +85,11 @@ export const useAgentStream = () => {
     clarificationCard: computed(() => mergedSnapshot.value.clarificationCard),
     finalMessage: computed(() => mergedSnapshot.value.finalMessage),
     errorMessage: computed(() => mergedSnapshot.value.errorMessage),
+    finalPayload: computed(() => mergedSnapshot.value.finalPayload),
+    traceId: computed(() => mergedSnapshot.value.traceId),
+    turnId: computed(() => mergedSnapshot.value.turnId),
+    sessionId: computed(() => mergedSnapshot.value.sessionId),
+    workflowVersion: computed(() => mergedSnapshot.value.workflowVersion),
     hydrateFromRecords,
     resetStreamState,
     stopStream,

@@ -56,12 +56,12 @@ const handleViewWork = () => {
 
 <style scoped>
 .app-card {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--surface-elevated);
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 8px 32px var(--shadow-color);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-color);
   transition:
     transform 0.3s,
     box-shadow 0.3s;
@@ -70,12 +70,12 @@ const handleViewWork = () => {
 
 .app-card:hover {
   transform: translateY(-8px);
-  box-shadow: 0 15px 50px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 15px 50px var(--shadow-color);
 }
 
 .app-preview {
   height: 180px;
-  background: #f5f5f5;
+  background: var(--surface-muted);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -91,7 +91,7 @@ const handleViewWork = () => {
 
 .app-placeholder {
   font-size: 48px;
-  color: #d9d9d9;
+  color: var(--text-tertiary);
 }
 
 .app-overlay {
@@ -100,7 +100,7 @@ const handleViewWork = () => {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 23, 42, 0.52);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -132,7 +132,7 @@ const handleViewWork = () => {
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 4px;
-  color: #1a1a1a;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -140,7 +140,7 @@ const handleViewWork = () => {
 
 .app-author {
   font-size: 14px;
-  color: #666;
+  color: var(--text-secondary);
   margin: 0;
   white-space: nowrap;
   overflow: hidden;

@@ -1,41 +1,47 @@
 <template>
   <a-layout-header class="header">
     <a-row :wrap="false">
-      <!-- 左侧：Logo和标题 -->
-      <a-col flex="200px">
-        <RouterLink to="/">
-          <div class="header-left">
-            <img class="logo" src="@/assets/logo.png" alt="Logo" />
-            <h1 class="site-title">鱼皮应用生成</h1>
-          </div>
-        </RouterLink>
-      </a-col>
-      <!-- 中间：导航菜单 -->
       <a-col flex="auto">
-        <a-menu
-          v-model:selectedKeys="selectedKeys"
-          mode="horizontal"
-          :items="menuItems"
-          @click="handleMenuClick"
-        />
+        <div class="header-left">
+          <RouterLink to="/" class="brand-link">
+            <span class="brand-text">Agent</span>
+          </RouterLink>
+          <div class="mode-switch">
+            <a-button
+              size="small"
+              :type="uiPreferenceStore.uiMode === 'coding' ? 'primary' : 'default'"
+              :ghost="uiPreferenceStore.uiMode !== 'coding'"
+              @click="goCoding"
+            >
+              coding Agent
+            </a-button>
+            <a-button
+              size="small"
+              :type="uiPreferenceStore.uiMode === 'learning' ? 'primary' : 'default'"
+              :ghost="uiPreferenceStore.uiMode !== 'learning'"
+              @click="goLearning"
+            >
+              学习助手
+            </a-button>
+          </div>
+        </div>
       </a-col>
-      <!-- 右侧：用户操作区域 -->
       <a-col>
         <div class="user-login-status">
           <a-space>
-            <a-tooltip title="切换智能助手">
-              <a-button type="text" @click="() => emit('toggle-sidebar')">
+            <a-tooltip :title="uiPreferenceStore.themeMode === 'dark' ? '切换到浅色模式' : '切换到深色模式'">
+              <a-button type="text" @click="uiPreferenceStore.toggleThemeMode()">
                 <template #icon>
-                  <LayoutOutlined />
+                  <BulbOutlined />
                 </template>
               </a-button>
             </a-tooltip>
-            
+
             <div v-if="loginUserStore.loginUser.id">
               <a-dropdown>
                 <a-space>
                   <a-avatar :src="loginUserStore.loginUser.userAvatar" />
-                {{ loginUserStore.loginUser.userName ?? '无名' }}
+                  <span class="user-name">{{ loginUserStore.loginUser.userName ?? '无名' }}</span>
               </a-space>
               <template #overlay>
                 <a-menu>
@@ -58,73 +64,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { type MenuProps, message } from 'ant-design-vue'
+import { message } from 'ant-design-vue'
 import { useLoginUserStore } from '@/stores/loginUser.ts'
+import { useUiPreferenceStore } from '@/stores/uiPreference'
 import { userLogout } from '@/api/userController.ts'
-import { LogoutOutlined, HomeOutlined, LayoutOutlined } from '@ant-design/icons-vue'
+import { BulbOutlined, LogoutOutlined } from '@ant-design/icons-vue'
 
-const emit = defineEmits(['toggle-sidebar'])
 const loginUserStore = useLoginUserStore()
+const uiPreferenceStore = useUiPreferenceStore()
 const router = useRouter()
-// 当前选中菜单
-const selectedKeys = ref<string[]>(['/'])
-// 监听路由变化，更新当前选中菜单
-router.afterEach((to, from, next) => {
-  selectedKeys.value = [to.path]
-})
 
-// 菜单配置项
-const originItems = [
-  {
-    key: '/',
-    icon: () => h(HomeOutlined),
-    label: '主页',
-    title: '主页',
-  },
-  {
-    key: '/admin/userManage',
-    label: '用户管理',
-    title: '用户管理',
-  },
-  {
-    key: '/admin/appManage',
-    label: '应用管理',
-    title: '应用管理',
-  },
-  {
-    key: 'others',
-    label: h('a', { href: 'https://www.codefather.cn', target: '_blank' }, '编程导航'),
-    title: '编程导航',
-  },
-]
-
-// 过滤菜单项
-const filterMenus = (menus = [] as MenuProps['items']) => {
-  return menus?.filter((menu) => {
-    const menuKey = menu?.key as string
-    if (menuKey?.startsWith('/admin')) {
-      const loginUser = loginUserStore.loginUser
-      if (!loginUser || loginUser.userRole !== 'admin') {
-        return false
-      }
-    }
-    return true
-  })
+const goCoding = async () => {
+  await router.push('/')
 }
 
-// 展示在菜单的路由数组
-const menuItems = computed<MenuProps['items']>(() => filterMenus(originItems))
-
-// 处理菜单点击
-const handleMenuClick: MenuProps['onClick'] = (e) => {
-  const key = e.key as string
-  selectedKeys.value = [key]
-  // 跳转到对应页面
-  if (key.startsWith('/')) {
-    router.push(key)
-  }
+const goLearning = async () => {
+  await router.push('/learning')
 }
 
 // 退出登录
@@ -144,28 +100,78 @@ const doLogout = async () => {
 
 <style scoped>
 .header {
-  background: #fff;
+  background: var(--surface-bg);
   padding: 0 24px;
+  border-bottom: 1px solid var(--border-color);
+  backdrop-filter: blur(18px);
+}
+
+.header :deep(.ant-row) {
+  align-items: center;
+  min-height: 64px;
+}
+
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
 }
 
-.logo {
-  height: 48px;
-  width: 48px;
-}
-
-.site-title {
+.brand-text {
   margin: 0;
-  font-size: 18px;
-  color: #1890ff;
+  font-size: 22px;
+  font-weight: 700;
+  color: rgb(var(--brand-primary-rgb));
+  letter-spacing: 0.04em;
 }
 
-.ant-menu-horizontal {
-  border-bottom: none !important;
+.mode-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 12px;
 }
+
+.mode-switch :deep(.ant-btn) {
+  border-radius: 999px;
+  border-color: var(--border-color);
+}
+
+.mode-switch :deep(.ant-btn-primary) {
+  background: rgb(var(--brand-primary-rgb));
+  border-color: rgb(var(--brand-primary-rgb));
+}
+
+html:not([data-theme='dark']) .mode-switch :deep(.ant-btn) {
+  color: #111827;
+  font-weight: 400;
+}
+
+html:not([data-theme='dark']) .mode-switch :deep(.ant-btn-primary) {
+  color: #111827;
+}
+
+.user-login-status :deep(.ant-btn-text) {
+  color: var(--text-primary);
+}
+
+.user-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+html[data-theme='dark'] .user-name {
+  color: #ffffff;
+}
+
+html:not([data-theme='dark']) .user-name {
+  color: #111827;
+}
+
 </style>

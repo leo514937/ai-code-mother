@@ -1,7 +1,14 @@
-import request from '@/request'
-import { API_BASE_URL } from '@/config/env'
+import { AGENT_API_BASE_URL } from '@/config/env'
+import agentRequest from './request'
 import { AGENT_THREAD_PAGE_SIZE } from './constants'
 import type {
+  AgentFeedbackRequest,
+  AgentFeedbackResponse,
+  AgentMemoryActionRequest,
+  AgentMemoryActionResponse,
+  AgentMemoryCandidateSummary,
+  AgentMemoryRecordSummary,
+  AgentMemoryTraceSummary,
   AgentMessageQueryRequest,
   AgentMessageRecord,
   AgentMessageStreamRequest,
@@ -9,7 +16,15 @@ import type {
   AgentThread,
   AgentThreadCreateRequest,
 } from './types'
-import { normalizeAgentMessageRecord, normalizeAgentThread } from './utils/agentEventReducer'
+import {
+  normalizeAgentFeedbackResponse,
+  normalizeMemoryActionResponse,
+  normalizeMemoryCandidateSummary,
+  normalizeMemoryRecordSummary,
+  normalizeMemoryTraceSummary,
+  normalizeAgentMessageRecord,
+  normalizeAgentThread,
+} from './utils/agentEventReducer'
 
 type AgentBaseResponse<T> = {
   code?: number
@@ -48,8 +63,11 @@ const resolveListData = <T>(value: unknown): T[] => {
   return []
 }
 
-const getApiBaseUrl = () => {
-  return request.defaults.baseURL || API_BASE_URL
+const getAgentApiBaseUrl = () => AGENT_API_BASE_URL.replace(/\/$/, '')
+
+const buildAgentApiUrl = (path: string) => {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${getAgentApiBaseUrl()}${normalizedPath}`
 }
 
 const parseSsePacket = (block: string): AgentRawSsePacket | null => {
@@ -132,7 +150,7 @@ const consumeSseResponse = async (
 }
 
 export const listAgentThreads = async (appId: string | number): Promise<AgentThread[]> => {
-  const response = await request<AgentBaseResponse<unknown>>('/agent/threads', {
+  const response = await agentRequest<AgentBaseResponse<unknown>>('/threads', {
     method: 'GET',
     params: { appId },
   })
@@ -141,7 +159,7 @@ export const listAgentThreads = async (appId: string | number): Promise<AgentThr
 }
 
 export const createAgentThread = async (payload: AgentThreadCreateRequest): Promise<AgentThread> => {
-  const response = await request<AgentBaseResponse<unknown>>('/agent/threads', {
+  const response = await agentRequest<AgentBaseResponse<unknown>>('/threads', {
     method: 'POST',
     data: payload,
   })
@@ -153,7 +171,7 @@ export const listAgentMessages = async (
   threadId: string,
   query: AgentMessageQueryRequest = {},
 ): Promise<AgentMessageRecord[]> => {
-  const response = await request<AgentBaseResponse<unknown>>(`/agent/threads/${threadId}/messages`, {
+  const response = await agentRequest<AgentBaseResponse<unknown>>(`/threads/${threadId}/messages`, {
     method: 'GET',
     params: {
       pageSize: query.pageSize ?? AGENT_THREAD_PAGE_SIZE,
@@ -165,15 +183,131 @@ export const listAgentMessages = async (
 }
 
 export const archiveAgentThread = async (threadId: string) => {
-  const response = await request<AgentBaseResponse<boolean>>(`/agent/threads/${threadId}/archive`, {
+  const response = await agentRequest<AgentBaseResponse<boolean>>(`/threads/${threadId}/archive`, {
     method: 'POST',
   })
   ensureSuccess(response.data)
   return true
 }
 
+export const reportAgentThreadFeedback = async (
+  threadId: string,
+  payload: AgentFeedbackRequest,
+): Promise<AgentFeedbackResponse> => {
+  const response = await agentRequest<AgentBaseResponse<AgentFeedbackResponse>>(
+    `/threads/${threadId}/feedback`,
+    {
+      method: 'POST',
+      data: payload,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return normalizeAgentFeedbackResponse(data)
+}
+
+export const listAgentThreadMemoryRecords = async (
+  threadId: string,
+  query: {
+    scope?: string
+    query?: string
+    limit?: number
+  } = {},
+): Promise<AgentMemoryRecordSummary[]> => {
+  const response = await agentRequest<AgentBaseResponse<unknown>>(
+    `/threads/${threadId}/memory/records`,
+    {
+      method: 'GET',
+      params: query,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return resolveListData<unknown>(data).map((item) => normalizeMemoryRecordSummary(item))
+}
+
+export const listAgentThreadMemoryCandidates = async (
+  threadId: string,
+  limit = 50,
+): Promise<AgentMemoryCandidateSummary[]> => {
+  const response = await agentRequest<AgentBaseResponse<unknown>>(
+    `/threads/${threadId}/memory/candidates`,
+    {
+      method: 'GET',
+      params: { limit },
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return resolveListData<unknown>(data).map((item) => normalizeMemoryCandidateSummary(item))
+}
+
+export const listAgentThreadMemoryTraces = async (
+  threadId: string,
+  query: {
+    sessionId?: string
+    turnId?: string
+    limit?: number
+  } = {},
+): Promise<AgentMemoryTraceSummary[]> => {
+  const response = await agentRequest<AgentBaseResponse<unknown>>(
+    `/threads/${threadId}/memory/traces`,
+    {
+      method: 'GET',
+      params: query,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return resolveListData<unknown>(data).map((item) => normalizeMemoryTraceSummary(item))
+}
+
+export const confirmAgentThreadMemoryCandidate = async (
+  threadId: string,
+  candidateId: string,
+  payload: AgentMemoryActionRequest = {},
+): Promise<AgentMemoryActionResponse> => {
+  const response = await agentRequest<AgentBaseResponse<AgentMemoryActionResponse>>(
+    `/threads/${threadId}/memory/candidates/${candidateId}/confirm`,
+    {
+      method: 'POST',
+      data: payload,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return normalizeMemoryActionResponse(data)
+}
+
+export const rejectAgentThreadMemoryCandidate = async (
+  threadId: string,
+  candidateId: string,
+  payload: AgentMemoryActionRequest = {},
+): Promise<AgentMemoryActionResponse> => {
+  const response = await agentRequest<AgentBaseResponse<AgentMemoryActionResponse>>(
+    `/threads/${threadId}/memory/candidates/${candidateId}/reject`,
+    {
+      method: 'POST',
+      data: payload,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return normalizeMemoryActionResponse(data)
+}
+
+export const deleteAgentThreadMemoryRecord = async (
+  threadId: string,
+  memoryId: string,
+  payload: AgentMemoryActionRequest = {},
+): Promise<AgentMemoryActionResponse> => {
+  const response = await agentRequest<AgentBaseResponse<AgentMemoryActionResponse>>(
+    `/threads/${threadId}/memory/records/${memoryId}/delete`,
+    {
+      method: 'POST',
+      data: payload,
+    },
+  )
+  const data = ensureSuccess(response.data)
+  return normalizeMemoryActionResponse(data)
+}
+
 export const getAgentSidebarEnabled = async (): Promise<boolean> => {
-  const response = await request<AgentBaseResponse<boolean>>('/agent/sidebar/enabled', {
+  const response = await agentRequest<AgentBaseResponse<boolean>>('/sidebar/enabled', {
     method: 'GET',
   })
   return Boolean(ensureSuccess(response.data))
@@ -187,7 +321,7 @@ export const streamAgentMessage = async (
     onEvent: (event: AgentRawSsePacket) => void
   },
 ) => {
-  const response = await fetch(`${getApiBaseUrl()}/agent/threads/${threadId}/messages/stream`, {
+  const response = await fetch(buildAgentApiUrl(`/threads/${threadId}/messages/stream`), {
     method: 'POST',
     credentials: 'include',
     headers: {

@@ -5,6 +5,7 @@ from .knowledge_governance import KnowledgeGovernanceRepository
 from .learning_plan import LearningPlanRepository
 from .outbox import OutboxRepository
 from .preferences import UserPreferenceRepository
+from .memory_trace_repository import MemoryTraceRepository
 from .records import (
     ClarificationRecordEntry,
     KnowledgeDocumentRecord,
@@ -42,6 +43,7 @@ __all__ = [
     "KnowledgeGovernanceRepository",
     "LearningPlanItemRecord",
     "LearningPlanRepository",
+    "MemoryTraceRepository",
     "NoOpSemanticMemoryStore",
     "OutboxAsyncLogStore",
     "OutboxEventRecord",

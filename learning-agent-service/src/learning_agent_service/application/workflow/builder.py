@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
-
 from ...domain.errors import TerminalEvent
 from .runner import SequentialWorkflowRunner
 from .services import WorkflowServices
 from .subgraphs import (
+    run_plan_execute_subgraph,
     run_rag_subgraph,
     run_tool_subgraph,
     run_understand_turn,
     should_clarify,
-    should_recommend,
-    should_run_rag,
-    should_run_tools,
+    route_after_mastery,
+    route_after_rag,
+    route_after_understand,
 )
 
 try:
@@ -26,16 +25,21 @@ LANGGRAPH_AVAILABLE = StateGraph is not None
 
 
 class LangGraphWorkflowRunner(SequentialWorkflowRunner):
-    def __init__(self, services: WorkflowServices, workflow_version: str = "learn-agent/v1") -> None:
+    def __init__(
+        self,
+        services: WorkflowServices,
+        workflow_version: str = "learn-agent/v1",
+        checkpointer: object | None = None,
+    ) -> None:
         super().__init__(services=services, workflow_version=workflow_version)
-        self._graph = _build_langgraph_runner(services)
+        self._graph = _build_langgraph_runner(services, checkpointer=checkpointer)
 
     def run_state(self, state):
         if self._is_terminal(state):
             return self._finalize_terminal(state)
 
         try:
-            result = self._graph.invoke(state)
+            result = self._graph.invoke(state, config=_build_graph_config(state))
         except Exception as exc:
             result = self._record_unexpected_error(state, "langgraph.invoke", exc)
 
@@ -59,14 +63,22 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         return self._finalize_terminal(result, default_terminal=TerminalEvent.FINAL)
 
 
+def _build_graph_config(state):
+    runtime = state["runtime"]
+    return {"configurable": {"thread_id": runtime.session_id}}
 
-def _build_langgraph_runner(services: WorkflowServices):
+
+def _build_langgraph_runner(services: WorkflowServices, checkpointer: object | None = None):
     if not LANGGRAPH_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
 
     graph = StateGraph(dict)
     graph.add_node("load_context", services.load_context)
     graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn))
+    graph.add_node(
+        "plan_execute_subgraph",
+        lambda state: run_plan_execute_subgraph(state, services.plan_execute_subgraph),
+    )
     graph.add_node("rag_subgraph", lambda state: run_rag_subgraph(state, services.rag_subgraph))
     graph.add_node("tool_subgraph", lambda state: run_tool_subgraph(state, services.tool_subgraph))
     graph.add_node("compose_answer", services.compose_answer)
@@ -79,9 +91,10 @@ def _build_langgraph_runner(services: WorkflowServices):
     graph.add_edge("load_context", "understand_turn")
     graph.add_conditional_edges(
         "understand_turn",
-        _route_after_understanding,
+        route_after_understand,
         {
             "emit_final": "emit_final",
+            "plan_execute_subgraph": "plan_execute_subgraph",
             "rag_subgraph": "rag_subgraph",
             "tool_subgraph": "tool_subgraph",
             "compose_answer": "compose_answer",
@@ -89,18 +102,19 @@ def _build_langgraph_runner(services: WorkflowServices):
     )
     graph.add_conditional_edges(
         "rag_subgraph",
-        _route_after_rag,
+        route_after_rag,
         {
             "tool_subgraph": "tool_subgraph",
             "compose_answer": "compose_answer",
         },
     )
     graph.add_edge("tool_subgraph", "compose_answer")
+    graph.add_edge("plan_execute_subgraph", "compose_answer")
     graph.add_edge("compose_answer", "persist_session")
     graph.add_edge("persist_session", "update_mastery")
     graph.add_conditional_edges(
         "update_mastery",
-        _route_after_mastery,
+        route_after_mastery,
         {
             "recommend_next": "recommend_next",
             "emit_final": "emit_final",
@@ -108,32 +122,7 @@ def _build_langgraph_runner(services: WorkflowServices):
     )
     graph.add_edge("recommend_next", "emit_final")
     graph.add_edge("emit_final", END)
-    return graph.compile()
-
-
-
-def _route_after_understanding(state: Any) -> str:
-    if should_clarify(state):
-        return "emit_final"
-    if should_run_rag(state):
-        return "rag_subgraph"
-    if should_run_tools(state):
-        return "tool_subgraph"
-    return "compose_answer"
-
-
-
-def _route_after_rag(state: Any) -> str:
-    if should_run_tools(state):
-        return "tool_subgraph"
-    return "compose_answer"
-
-
-
-def _route_after_mastery(state: Any) -> str:
-    if should_recommend(state):
-        return "recommend_next"
-    return "emit_final"
+    return graph.compile(checkpointer=checkpointer)
 
 
 
@@ -141,7 +130,12 @@ def create_workflow_runner(
     services: WorkflowServices,
     prefer_langgraph: bool = True,
     workflow_version: str = "learn-agent/v1",
+    checkpointer: object | None = None,
 ):
     if prefer_langgraph and LANGGRAPH_AVAILABLE:
-        return LangGraphWorkflowRunner(services=services, workflow_version=workflow_version)
+        return LangGraphWorkflowRunner(
+            services=services,
+            workflow_version=workflow_version,
+            checkpointer=checkpointer,
+        )
     return SequentialWorkflowRunner(services=services, workflow_version=workflow_version)

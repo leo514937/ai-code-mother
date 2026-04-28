@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from .models import KnowledgeChunk
@@ -152,12 +153,17 @@ def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> T
             document_id=str(row["document_id"]),
             text=str(row["text"]),
             title=str(row.get("title") or row["chunk_id"]),
+            summary=_optional_str(row.get("summary")),
             category=_optional_str(row.get("category")),
             subcategory=_optional_str(row.get("subcategory")),
             difficulty=_optional_str(row.get("difficulty")),
             source_type=_optional_str(row.get("source_type")),
             chunk_type=_optional_str(row.get("chunk_type")),
             version=_optional_str(row.get("version")),
+            parent_id=_optional_str(row.get("parent_id")),
+            is_latest=bool(row.get("is_latest", True)),
+            hash=_optional_str(row.get("hash"))
+            or hashlib.sha1(f'{row["document_id"]}:{row["chunk_id"]}:{row["text"]}'.encode("utf-8")).hexdigest(),
             tags=tuple(str(tag) for tag in row.get("tags", ()) if tag),
             metadata=dict(row.get("metadata", {})),
         )

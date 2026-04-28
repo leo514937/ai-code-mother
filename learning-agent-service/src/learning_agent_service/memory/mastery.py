@@ -9,6 +9,25 @@ from .models import TopicMasteryRecord
 
 
 @dataclass(frozen=True)
+class MasteryPolicyConfig:
+    quiz_super_high_threshold: float = 0.85
+    quiz_high_threshold: float = 0.7
+    quiz_mid_threshold: float = 0.5
+    quiz_low_threshold: float = 0.35
+    weak_signal_quiz_threshold: float = 0.6
+    review_priority_base_mastery: float = 0.65
+    review_priority_low_quiz_threshold: float = 0.6
+    review_priority_low_quiz_bonus: float = 22.0
+    review_priority_weak_signal_bonus: float = 15.0
+    review_priority_low_evidence_threshold: int = 3
+    review_priority_low_evidence_bonus: float = 8.0
+    review_priority_negative_signal_bonus: float = 5.0
+    review_priority_negative_signal_cap: float = 20.0
+    review_priority_high_mastery_threshold: float = 0.75
+    review_priority_high_mastery_bonus: float = -10.0
+
+
+@dataclass(frozen=True)
 class MasteryUpdateInput:
     topic: str
     signal_type: str = "study"
@@ -24,8 +43,13 @@ class MasteryUpdateInput:
 
 
 class TopicMasteryUpdater:
-    def __init__(self, resolver: Optional[CanonicalTopicResolver] = None) -> None:
+    def __init__(
+        self,
+        resolver: Optional[CanonicalTopicResolver] = None,
+        config: Optional[MasteryPolicyConfig] = None,
+    ) -> None:
         self._resolver = resolver or CanonicalTopicResolver()
+        self.config = config or MasteryPolicyConfig()
 
     def update(self, current: Optional[TopicMasteryRecord], signal: MasteryUpdateInput) -> TopicMasteryRecord:
         topic = self._resolver.canonicalize(signal.topic)
@@ -36,21 +60,26 @@ class TopicMasteryUpdater:
         positive_signals = existing.positive_signals
         negative_signals = existing.negative_signals
         last_quiz_score = existing.last_quiz_score
+        weak_signal = bool(
+            signal.weak_signal
+            or signal.was_confused
+            or (signal.quiz_score is not None and signal.quiz_score < self.config.weak_signal_quiz_threshold)
+        )
 
         if signal.quiz_score is not None:
             last_quiz_score = signal.quiz_score
-            if signal.quiz_score >= 0.85:
+            if signal.quiz_score >= self.config.quiz_super_high_threshold:
                 mastery_score += 0.15
                 confidence_score += 0.08
                 positive_signals += 1
-            elif signal.quiz_score >= 0.7:
+            elif signal.quiz_score >= self.config.quiz_high_threshold:
                 mastery_score += 0.08
                 confidence_score += 0.05
                 positive_signals += 1
-            elif signal.quiz_score >= 0.5:
+            elif signal.quiz_score >= self.config.quiz_mid_threshold:
                 mastery_score += 0.02
                 confidence_score += 0.02
-            elif signal.quiz_score >= 0.35:
+            elif signal.quiz_score >= self.config.quiz_low_threshold:
                 mastery_score -= 0.10
                 confidence_score -= 0.02
                 negative_signals += 1
@@ -62,7 +91,7 @@ class TopicMasteryUpdater:
             mastery_score += 0.12
             confidence_score += 0.05
             positive_signals += 1
-        elif signal.weak_signal or signal.was_confused:
+        elif weak_signal:
             mastery_score -= 0.1
             confidence_score -= 0.02
             negative_signals += 1
@@ -93,7 +122,7 @@ class TopicMasteryUpdater:
         review_priority = self._review_priority(
             mastery_score=mastery_score,
             quiz_score=last_quiz_score,
-            weak_signal=signal.weak_signal or signal.was_confused,
+            weak_signal=weak_signal,
             negative_signals=negative_signals,
             evidence_count=evidence_count,
         )
@@ -111,22 +140,22 @@ class TopicMasteryUpdater:
             extra=dict(existing.extra),
         )
 
-    @staticmethod
     def _review_priority(
+        self,
         mastery_score: float,
         quiz_score: Optional[float],
         weak_signal: bool,
         negative_signals: int,
         evidence_count: int,
     ) -> float:
-        priority = 20.0 + max(0.0, (0.65 - mastery_score) * 100.0)
-        if quiz_score is not None and quiz_score < 0.6:
-            priority += 22.0
+        priority = 20.0 + max(0.0, (self.config.review_priority_base_mastery - mastery_score) * 100.0)
+        if quiz_score is not None and quiz_score < self.config.review_priority_low_quiz_threshold:
+            priority += self.config.review_priority_low_quiz_bonus
         if weak_signal:
-            priority += 15.0
-        if evidence_count < 3:
-            priority += 8.0
-        priority += min(negative_signals * 5.0, 20.0)
-        if mastery_score >= 0.75 and negative_signals == 0:
-            priority -= 10.0
+            priority += self.config.review_priority_weak_signal_bonus
+        if evidence_count < self.config.review_priority_low_evidence_threshold:
+            priority += self.config.review_priority_low_evidence_bonus
+        priority += min(negative_signals * self.config.review_priority_negative_signal_bonus, self.config.review_priority_negative_signal_cap)
+        if mastery_score >= self.config.review_priority_high_mastery_threshold and negative_signals == 0:
+            priority += self.config.review_priority_high_mastery_bonus
         return max(0.0, min(priority, 100.0))

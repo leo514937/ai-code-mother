@@ -75,18 +75,18 @@ watch(
   align-items: center;
   justify-content: space-between;
   padding: 16px;
-  border-bottom: 1px solid #eef2f7;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .pane-title {
   font-size: 13px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text-primary);
 }
 
 .pane-subtitle {
   margin-top: 4px;
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
@@ -100,7 +100,7 @@ watch(
 }
 
 .pane-empty {
-  color: #64748b;
+  color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -126,23 +126,23 @@ watch(
 }
 
 .message-bubble.user {
-  background: #0f172a;
-  color: #ffffff;
+  background: rgb(var(--brand-primary-rgb));
+  color: var(--text-inverse);
 }
 
 .message-bubble.assistant {
-  background: #ffffff;
-  color: #1f2937;
-  border: 1px solid #e5e7eb;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
 }
 
 .message-status {
   margin-top: 8px;
   font-size: 11px;
-  color: #64748b;
+  color: var(--text-secondary);
 }
 
 .message-status.error {
-  color: #dc2626;
+  color: #f87171;
 }
 </style>

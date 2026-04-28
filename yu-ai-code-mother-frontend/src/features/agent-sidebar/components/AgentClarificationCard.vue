@@ -33,21 +33,21 @@ defineEmits<{
 <style scoped>
 .clarification-card {
   padding: 14px 16px;
-  border-top: 1px solid #edf2f7;
-  border-bottom: 1px solid #edf2f7;
-  background: #fffdf7;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-muted);
 }
 
 .card-title {
   font-size: 13px;
   font-weight: 700;
-  color: #92400e;
+  color: rgb(var(--brand-primary-rgb));
 }
 
 .card-description {
   margin-top: 6px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 
 .card-options {
@@ -63,6 +63,6 @@ defineEmits<{
 .option-description {
   margin-top: 4px;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--text-secondary);
 }
 </style>

@@ -11,13 +11,13 @@ from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from ...domain.state import GraphState, build_initial_state, clone_graph_state
 from .services import WorkflowServices
 from .subgraphs import (
+    run_plan_execute_subgraph,
     run_rag_subgraph,
     run_tool_subgraph,
     run_understand_turn,
-    should_clarify,
-    should_recommend,
-    should_run_rag,
-    should_run_tools,
+    route_after_mastery,
+    route_after_rag,
+    route_after_understand,
 )
 
 
@@ -65,10 +65,19 @@ class SequentialWorkflowRunner:
             lambda current: run_understand_turn(current, self.services.understand_turn),
             state,
         )
-        if self._is_terminal(state) or should_clarify(state):
+        next_stage = route_after_understand(state)
+        if next_stage == "emit_final":
             return self._finalize_terminal(state, default_terminal=TerminalEvent.CLARIFICATION_CARD)
 
-        if should_run_rag(state):
+        if next_stage == "plan_execute_subgraph":
+            state = self._invoke_stage(
+                "plan_execute_subgraph",
+                lambda current: run_plan_execute_subgraph(current, self.services.plan_execute_subgraph),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+        elif next_stage == "rag_subgraph":
             state = self._invoke_stage(
                 "rag_subgraph",
                 lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
@@ -76,8 +85,16 @@ class SequentialWorkflowRunner:
             )
             if self._is_terminal(state):
                 return self._finalize_terminal(state)
-
-        if should_run_tools(state):
+            next_stage = route_after_rag(state)
+            if next_stage == "tool_subgraph":
+                state = self._invoke_stage(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+        elif next_stage == "tool_subgraph":
             state = self._invoke_stage(
                 "tool_subgraph",
                 lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
@@ -98,7 +115,8 @@ class SequentialWorkflowRunner:
         if self._is_terminal(state):
             return self._finalize_terminal(state)
 
-        if should_recommend(state):
+        next_stage = route_after_mastery(state)
+        if next_stage == "recommend_next":
             state = self._invoke_stage("recommend_next", self.services.recommend_next, state)
             if self._is_terminal(state):
                 return self._finalize_terminal(state)

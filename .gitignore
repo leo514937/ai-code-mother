@@ -36,3 +36,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Codex workspace cache ###
+.codex-pydeps/
+.codex-tmp/

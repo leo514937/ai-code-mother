@@ -21,15 +21,10 @@ from learning_agent_service.domain import (
 from .citation import CitationBuilder
 from .defaults import DEFAULT_KNOWLEDGE_CHUNKS
 from .domain_adapter import DomainRagAdapter
-from .evidence import EvidenceGovernanceConfig, EvidenceGovernanceService
+from .evidence import EvidenceGovernanceService
 from .governance import GovernanceConfig, KnowledgeGovernanceService
-from .hybrid import (
-    HybridRetrieverConfig,
-    HybridRetrieverService,
-    InMemoryReranker,
-    InMemoryTokenRetriever,
-)
-from .models import KnowledgeChunk, KnowledgeGovernanceDecision, latest_version
+from .retrieval import HeuristicDenseRetriever, HeuristicMetadataRetriever, HeuristicReranker, HybridRetrieverService, LocalBM25SparseRetriever, ParentChildResolver, ReciprocalRankFusion
+from .models import KnowledgeChunk, KnowledgeGovernanceDecision, RetrievalTrace, latest_version
 from .protocols import DenseRetriever, HybridRetriever, MetadataRetriever, Reranker, SparseRetriever
 from .reference import ReferenceResolver
 from .rewrite import QueryRewriteService
@@ -44,7 +39,6 @@ class HybridRAGOrchestrator:
         settings: Settings,
         *,
         knowledge_chunks: Optional[Iterable[KnowledgeChunk]] = None,
-        rewrite_service: Optional[QueryRewriteService] = None,
         dense_retriever: Optional[DenseRetriever] = None,
         sparse_retriever: Optional[SparseRetriever] = None,
         metadata_retriever: Optional[MetadataRetriever] = None,
@@ -54,42 +48,48 @@ class HybridRAGOrchestrator:
         citation_builder: Optional[CitationBuilder] = None,
         governance_service: Optional[KnowledgeGovernanceService] = None,
         reference_resolver: Optional[ReferenceResolver] = None,
+        parent_child_resolver: Optional[ParentChildResolver] = None,
+        rewrite_service: Optional[QueryRewriteService] = None,
         runtime_mode: str = "snapshot",
     ) -> None:
         self.settings = settings
         self.runtime_mode = runtime_mode
         self._adapter = DomainRagAdapter()
-        self._rewrite = rewrite_service or QueryRewriteService()
+        self._policy = settings.policy_settings()
+        initial_chunks = tuple(knowledge_chunks or DEFAULT_KNOWLEDGE_CHUNKS)
+        self._parent_child_resolver = parent_child_resolver or ParentChildResolver(initial_chunks)
+        self._rewrite = rewrite_service or QueryRewriteService(
+            self._policy.query_rewrite
+        )
         self._governance = governance_service or KnowledgeGovernanceService(GovernanceConfig())
 
-        initial_chunks = tuple(knowledge_chunks or DEFAULT_KNOWLEDGE_CHUNKS)
         self._chunks = self._governance.deduplicate_chunks(initial_chunks)
 
-        self._dense_retriever = dense_retriever or InMemoryTokenRetriever(self._chunks, "dense")
-        self._sparse_retriever = sparse_retriever or InMemoryTokenRetriever(self._chunks, "sparse")
-        self._metadata_retriever = metadata_retriever or InMemoryTokenRetriever(self._chunks, "metadata")
-        self._reranker = reranker or InMemoryReranker()
+        self._dense_retriever = dense_retriever or HeuristicDenseRetriever(self._chunks, self._parent_child_resolver)
+        self._sparse_retriever = sparse_retriever or LocalBM25SparseRetriever(
+            self._chunks,
+            self._parent_child_resolver,
+            enabled=settings.enable_bm25_sparse_retrieval,
+            k1=settings.bm25_k1,
+            b=settings.bm25_b,
+        )
+        self._metadata_retriever = metadata_retriever or HeuristicMetadataRetriever(self._chunks, self._parent_child_resolver)
+        self._reranker = reranker or HeuristicReranker()
         self._retriever = hybrid_retriever or HybridRetrieverService(
             dense_retriever=self._dense_retriever,
             sparse_retriever=self._sparse_retriever,
             metadata_retriever=self._metadata_retriever,
             reranker=self._reranker,
-            config=HybridRetrieverConfig(
-                dense_top_k=settings.dense_top_k,
-                sparse_top_k=settings.sparse_top_k,
-                metadata_top_k=settings.metadata_top_k,
-                rrf_k=settings.rrf_k,
-                rerank_top_k=settings.rerank_top_k,
-            ),
+            config=self._policy.hybrid_retriever,
+            fusion=ReciprocalRankFusion(self._policy.rrf),
+            parent_child_resolver=self._parent_child_resolver,
+            rewrite_service=self._rewrite,
+            llm_rewrite_enabled=self._policy.query_rewrite.llm_enabled,
+            llm_rewrite_retry_limit=self._policy.query_rewrite.llm_retry_limit,
+            hyde_enabled=self._policy.query_rewrite.hyde_enabled,
         )
         self._evidence = evidence_service or EvidenceGovernanceService(
-            EvidenceGovernanceConfig(
-                low_score_threshold=settings.low_score_threshold,
-                dedup_similarity_threshold=settings.dedup_similarity_threshold,
-                topic_consistency_threshold=settings.topic_consistency_threshold,
-                min_items=settings.evidence_min_n,
-                max_items=settings.evidence_top_n,
-            )
+            self._policy.evidence_governance
         )
         self._citation_builder = citation_builder or CitationBuilder()
         self._reference_resolver = reference_resolver or ReferenceResolver()
@@ -116,27 +116,28 @@ class HybridRAGOrchestrator:
     def hybrid_retrieve(self, request: HybridRetrieveRequest) -> HybridRecallResult:
         internal_plan = self._adapter.to_internal_plan(
             request,
-            dense_top_k=self.settings.dense_top_k,
-            sparse_top_k=self.settings.sparse_top_k,
-            metadata_top_k=self.settings.metadata_top_k,
-            rerank_top_k=self.settings.rerank_top_k,
-            max_evidence=self.settings.evidence_top_n,
+            dense_top_k=self._policy.hybrid_retriever.dense_top_k,
+            sparse_top_k=self._policy.hybrid_retriever.sparse_top_k,
+            metadata_top_k=self._policy.hybrid_retriever.metadata_top_k,
+            rerank_top_k=self._policy.hybrid_retriever.rerank_top_k,
+            max_evidence=self._policy.evidence_governance.max_items,
         )
         return self._adapter.to_domain_hybrid(self._retriever.retrieve(internal_plan))
 
     def evaluate_evidence(self, request: EvidenceEvaluationRequest) -> EvidencePack:
         internal_plan = self._adapter.to_internal_plan(
             request,
-            dense_top_k=self.settings.dense_top_k,
-            sparse_top_k=self.settings.sparse_top_k,
-            metadata_top_k=self.settings.metadata_top_k,
-            rerank_top_k=self.settings.rerank_top_k,
-            max_evidence=self.settings.evidence_top_n,
+            dense_top_k=self._policy.hybrid_retriever.dense_top_k,
+            sparse_top_k=self._policy.hybrid_retriever.sparse_top_k,
+            metadata_top_k=self._policy.hybrid_retriever.metadata_top_k,
+            rerank_top_k=self._policy.hybrid_retriever.rerank_top_k,
+            max_evidence=self._policy.evidence_governance.max_items,
         )
         internal_hits = self._adapter.to_internal_hits(request.hybrid_recall.reranked_hits)
         if not internal_hits:
             internal_hits = tuple(self._retriever.retrieve(internal_plan).hits)
-        evidence = self._evidence.evaluate(internal_plan, internal_hits)
+        evidence_trace = _trace_from_payload(request.hybrid_recall.extra.get("retrieval_debug"))
+        evidence = self._evidence.evaluate(internal_plan, internal_hits, trace=evidence_trace)
         return self._adapter.to_domain_evidence_pack(evidence, request.plan)
 
     def build_citations(self, request: CitationBuildRequest) -> Iterable[Citation]:
@@ -207,3 +208,21 @@ __all__ = [
     "DEFAULT_KNOWLEDGE_CHUNKS",
     "HybridRAGOrchestrator",
 ]
+
+
+def _trace_from_payload(payload: object) -> RetrievalTrace | None:
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return RetrievalTrace(
+            raw_query=str(payload.get("raw_query") or ""),
+            semantic_query=str(payload.get("semantic_query") or ""),
+            keyword_query=str(payload.get("keyword_query") or ""),
+            retrieval_filters=DomainRagAdapter().to_internal_filters(payload.get("retrieval_filters", {})),
+            final_retrieval_filters=dict(payload.get("final_retrieval_filters", {})),
+            preferred_chunk_types=tuple(payload.get("preferred_chunk_types", [])),
+            metrics=dict(payload.get("metrics", {})),
+            extra=dict(payload.get("extra", {})),
+        )
+    except Exception:
+        return None

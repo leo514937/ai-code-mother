@@ -22,6 +22,8 @@ public class PythonAgentEventConverter {
         eventVO.setThreadId(threadId);
         eventVO.setTurnId(envelope.getTurnId());
         eventVO.setTraceId(envelope.getTraceId());
+        eventVO.setSessionId(envelope.getSessionId());
+        eventVO.setWorkflowVersion(envelope.getWorkflowVersion());
         eventVO.setTimestamp(toLocalDateTime(envelope.getTimestamp()));
         eventVO.setPayload(envelope.getPayload());
         return eventVO;
@@ -33,6 +35,8 @@ public class PythonAgentEventConverter {
         eventVO.setThreadId(threadId);
         eventVO.setTurnId(turnId);
         eventVO.setTraceId(traceId);
+        eventVO.setSessionId(null);
+        eventVO.setWorkflowVersion(null);
         eventVO.setTimestamp(LocalDateTime.now());
         eventVO.setPayload(payload);
         return eventVO;
